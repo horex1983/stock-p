@@ -1,60 +1,43 @@
 """
-app_public.py — KIS Premium Momentum Dashboard (Project 2 / Streamlit Cloud 공개 배포)
-
-합법 소스만 사용:
-  - 금융위원회 공공API (apis.data.go.kr) → 시세, 급등랭킹, 지수
-  - DART API (opendart.fss.or.kr)         → 공시/감사의견
-  - yfinance                               → 현재가 보완 (15분 지연)
-  - GitHub private repo (JSON)             → Project 1 수집 데이터
-      · accumulated.json   (infostock 테마뉴스)
-      · surge_reasons_db.json (급등이유)
-      · rsi_snapshot.json  (RSI 스냅샷)
-      · cb_overhang_cache.json (CB/BW 오버행)
-
-실행:
-    streamlit run app_public.py
-
-환경변수 (Streamlit Secrets 또는 .env):
-    PUBLIC_DATA_API_KEY   data.go.kr API 키
-    DART_API_KEY          opendart.fss.or.kr API 키
-    GITHUB_TOKEN          GitHub Personal Access Token (repo:read 권한)
-    GITHUB_REPO           데이터 저장소 (예: yourname/my-stock-data)
-    GITHUB_BRANCH         브랜치 (기본값: main)
+app_public.py — 급등주 모멘텀 대시보드 (공개 배포용)
+합법 소스: 금융위원회 공공API + DART + yfinance + GitHub 공유데이터
 """
 
-import os
-import json
-import base64
-import logging
-import requests
+import os, json, base64, logging, requests
 import streamlit as st
 import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import yfinance as yf
 from datetime import datetime, timedelta, date
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# ── 페이지 설정 ───────────────────────────────────────────────────────────────
+st.set_page_config(page_title="급등주 모멘텀 대시보드", page_icon="📈",
+                   layout="wide", initial_sidebar_state="expanded")
 
-st.set_page_config(
-    page_title="급등주 모멘텀 대시보드 (공개)",
-    page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+st.markdown("""
+<style>
+[data-testid="stAppViewContainer"] { background: #0e1117; }
+[data-testid="stSidebar"] { background: #161b22; }
+.metric-card { background: #161b22; border: 1px solid #30363d;
+    border-radius: 8px; padding: 12px 16px; margin-bottom: 8px; }
+.metric-label { color: #8b949e; font-size: 0.78em; margin-bottom: 2px; }
+.metric-value { color: #f0f6fc; font-size: 1.1em; font-weight: 700; }
+.up   { color: #f85149 !important; }
+.down { color: #58a6ff !important; }
+.section-title { color: #f0f6fc; font-size: 1.05em; font-weight: 700;
+    border-left: 3px solid #238636; padding-left: 8px; margin: 16px 0 8px 0; }
+</style>""", unsafe_allow_html=True)
 
-# ── Config ────────────────────────────────────────────────────────────────────
 
-def _secret(key: str, default: str = "") -> str:
-    """Streamlit Secrets → 환경변수 순으로 읽기."""
+def _secret(key, default=""):
     try:
-        if key in st.secrets:
-            return st.secrets[key]
-    except Exception:
-        pass
-    val = os.getenv(key, default)
-    return val.strip() if isinstance(val, str) else val
+        if key in st.secrets: return st.secrets[key]
+    except: pass
+    v = os.getenv(key, default)
+    return v.strip() if isinstance(v, str) else v
 
 
 PUBLIC_DATA_API_KEY = _secret("PUBLIC_DATA_API_KEY")
@@ -62,392 +45,277 @@ DART_API_KEY        = _secret("DART_API_KEY")
 GITHUB_TOKEN        = _secret("GITHUB_TOKEN")
 GITHUB_REPO         = _secret("GITHUB_REPO")
 GITHUB_BRANCH       = _secret("GITHUB_BRANCH", "main")
-
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
-# ── GitHub JSON 읽기 ──────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=1800)   # 30분 캐시
-def fetch_github_json(repo_path: str) -> dict | list | None:
-    """
-    GitHub API로 private repo 파일 읽기.
-    repo_path: "data/accumulated.json" 형식
-    """
-    if not GITHUB_TOKEN or not GITHUB_REPO:
-        return None
-    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{repo_path}"
-    headers = {
-        "Authorization": f"Bearer {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
+@st.cache_data(ttl=1800)
+def _github_json(path):
+    if not GITHUB_TOKEN or not GITHUB_REPO: return None
     try:
-        r = requests.get(url, headers=headers,
-                         params={"ref": GITHUB_BRANCH}, timeout=10)
-        if r.status_code != 200:
-            log.warning(f"[github] {repo_path} → {r.status_code}")
-            return None
-        content = r.json().get("content", "")
-        raw = base64.b64decode(content).decode("utf-8")
-        return json.loads(raw)
-    except Exception as e:
-        log.error(f"[github] fetch failed {repo_path}: {e}")
-        return None
+        r = requests.get(
+            f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}",
+            headers={"Authorization": f"Bearer {GITHUB_TOKEN}",
+                     "Accept": "application/vnd.github+json"},
+            params={"ref": GITHUB_BRANCH}, timeout=10)
+        if r.status_code != 200: return None
+        return json.loads(base64.b64decode(r.json()["content"]).decode())
+    except: return None
 
 
-def _get_meta() -> dict:
-    meta = fetch_github_json("data/_meta.json") or {}
-    return meta
+def get_theme_news():
+    d = _github_json("data/accumulated.json")
+    return d.get("items", []) if isinstance(d, dict) else []
+
+def get_surge_reasons():
+    d = _github_json("data/surge_reasons_db.json")
+    return d if isinstance(d, dict) else {}
+
+def get_rsi_snapshot():
+    d = _github_json("data/rsi_snapshot.json")
+    return d if isinstance(d, dict) else {}
+
+def get_cb_overhang():
+    d = _github_json("data/cb_overhang_cache.json")
+    return d if isinstance(d, dict) else {}
+
+def get_meta():
+    d = _github_json("data/_meta.json")
+    return d if isinstance(d, dict) else {}
 
 
-# ── 공공데이터 API: 급등주 랭킹 ──────────────────────────────────────────────
+_PUB = "https://apis.data.go.kr/1160100/service"
 
-_PUB_BASE = "https://apis.data.go.kr/1160100/service"
 
-def _pub_get(endpoint: str, params: dict) -> dict | None:
-    if not PUBLIC_DATA_API_KEY:
-        return None
-    merged = {"serviceKey": PUBLIC_DATA_API_KEY, "resultType": "json", **params}
+def _pub(endpoint, params):
+    if not PUBLIC_DATA_API_KEY: return None
     try:
-        r = requests.get(f"{_PUB_BASE}/{endpoint}", params=merged, timeout=10)
-        r.raise_for_status()
-        data = r.json()
-        header = data.get("response", {}).get("header", {})
-        if header.get("resultCode") != "00":
-            return None
-        return data["response"]["body"]
-    except Exception as e:
-        log.error(f"[public] {endpoint}: {e}")
-        return None
+        r = requests.get(f"{_PUB}/{endpoint}",
+            params={"serviceKey": PUBLIC_DATA_API_KEY, "resultType": "json", **params},
+            timeout=10)
+        d = r.json()
+        if d.get("response", {}).get("header", {}).get("resultCode") != "00": return None
+        return d["response"]["body"]
+    except: return None
 
 
-def _latest_business_date() -> str:
+def _latest_biz_date():
     d = date.today()
-    if datetime.now().hour < 13:
-        d -= timedelta(days=1)
-    while d.weekday() >= 5:
-        d -= timedelta(days=1)
+    if datetime.now().hour < 13: d -= timedelta(days=1)
+    while d.weekday() >= 5: d -= timedelta(days=1)
     return d.strftime("%Y%m%d")
 
 
 @st.cache_data(ttl=3600)
-def get_surge_ranking(top_n: int = 50) -> pd.DataFrame:
-    """
-    공공API에서 등락률 상위 종목 조회 (T+1 기준).
-    실시간 데이터가 아닌 전일 종가 기준임을 주의.
-    """
-    bas_dt = _latest_business_date()
-    body = _pub_get(
-        "GetStockSecuritiesInfoService/getStockPriceInfo",
-        {"numOfRows": 3000, "pageNo": 1, "basDt": bas_dt},
-    )
-    if not body:
-        return pd.DataFrame()
-
+def get_surge_ranking(top_n=50):
+    bas_dt = _latest_biz_date()
+    body = _pub("GetStockSecuritiesInfoService/getStockPriceInfo",
+                {"numOfRows": 3000, "pageNo": 1, "basDt": bas_dt})
+    if not body: return pd.DataFrame()
     raw = body.get("items", {}).get("item", [])
     items = raw if isinstance(raw, list) else [raw]
-    if not items:
-        return pd.DataFrame()
-
+    if not items: return pd.DataFrame()
     df = pd.DataFrame(items)
-    # 등락률 숫자 변환
-    df["fltRt"] = pd.to_numeric(df.get("fltRt", 0), errors="coerce").fillna(0)
-    df["trqu"]  = pd.to_numeric(df.get("trqu",  0), errors="coerce").fillna(0)
-    df["clpr"]  = pd.to_numeric(df.get("clpr",  0), errors="coerce").fillna(0)
-
-    # ETF/ETN/인버스/레버리지 제거 (종목명 패턴 필터)
-    _EXCLUDE = ["ETF", "ETN", "SPAC", "인버스", "레버리지", "선물", "합성"]
-    mask = ~df["itmsNm"].str.contains("|".join(_EXCLUDE), na=False)
-    df = df[mask]
-
-    # 거래량 10만 이상, 등락률 양수
+    for col in ["fltRt", "trqu", "clpr"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    excl = ["ETF", "ETN", "SPAC", "인버스", "레버리지", "선물", "합성"]
+    df = df[~df["itmsNm"].str.contains("|".join(excl), na=False)]
     df = df[(df["trqu"] >= 100_000) & (df["fltRt"] > 0)]
-
     df = df.sort_values("fltRt", ascending=False).head(top_n).reset_index(drop=True)
-    df["rank"] = df.index + 1
-    return df[["rank", "srtnCd", "itmsNm", "mrktCtg", "clpr", "fltRt", "trqu", "basDt"]]
+    df.insert(0, "순위", df.index + 1)
+    return df
 
-
-# ── 공공데이터 API: 지수 ──────────────────────────────────────────────────────
 
 @st.cache_data(ttl=3600)
-def get_market_indices() -> dict:
-    bas_dt = _latest_business_date()
-    body = _pub_get(
-        "GetMarketIndexInfoService/getStockMarketIndex",
-        {"numOfRows": 50, "pageNo": 1, "basDt": bas_dt},
-    )
-    if not body:
-        return {}
+def get_indices():
+    bas_dt = _latest_biz_date()
+    body = _pub("GetMarketIndexInfoService/getStockMarketIndex",
+                {"numOfRows": 50, "pageNo": 1, "basDt": bas_dt})
+    if not body: return {}
     raw = body.get("items", {}).get("item", [])
     items = raw if isinstance(raw, list) else [raw]
-    result = {}
-    for it in items:
-        nm = str(it.get("idxNm", ""))
-        if nm in ("코스피", "코스닥", "코스피 200"):
-            result[nm] = it
-    return result
+    return {it["idxNm"]: it for it in items
+            if it.get("idxNm") in ("코스피", "코스닥", "코스피 200")}
 
 
-# ── 주가 차트 (yfinance) ──────────────────────────────────────────────────────
-
-@st.cache_data(ttl=900)   # 15분
-def get_price_history(ticker: str, period: str = "6mo") -> pd.DataFrame:
-    """yfinance로 OHLCV 조회 (15분 지연)."""
-    try:
-        yf_ticker = f"{ticker}.KS"
-        df = yf.download(yf_ticker, period=period, progress=False, auto_adjust=True)
-        if df.empty:
-            df = yf.download(f"{ticker}.KQ", period=period, progress=False, auto_adjust=True)
-        return df
-    except Exception as e:
-        log.error(f"[yfinance] {ticker}: {e}")
-        return pd.DataFrame()
+@st.cache_data(ttl=900)
+def get_ohlcv(ticker):
+    for suffix in [".KS", ".KQ"]:
+        try:
+            df = yf.download(ticker + suffix, period="6mo", progress=False, auto_adjust=True)
+            if not df.empty: return df
+        except: pass
+    return pd.DataFrame()
 
 
-# ── GitHub JSON: infostock 테마뉴스 ──────────────────────────────────────────
-
-def get_theme_news() -> list:
-    data = fetch_github_json("data/accumulated.json")
-    if isinstance(data, dict):
-        return data.get("items", [])
-    return []
-
-
-def get_surge_reasons() -> dict:
-    data = fetch_github_json("data/surge_reasons_db.json")
-    return data if isinstance(data, dict) else {}
-
-
-def get_rsi_snapshot() -> dict:
-    data = fetch_github_json("data/rsi_snapshot.json")
-    return data if isinstance(data, dict) else {}
-
-
-def get_cb_overhang() -> dict:
-    data = fetch_github_json("data/cb_overhang_cache.json")
-    return data if isinstance(data, dict) else {}
-
-
-# ── UI: 사이드바 ──────────────────────────────────────────────────────────────
-
-def render_sidebar(indices: dict):
-    st.sidebar.title("📊 시장 지수 (T+1)")
-    for nm, it in indices.items():
-        clpr  = float(it.get("clpr", 0))
-        fltRt = float(it.get("fltRt", 0))
-        color = "🟢" if fltRt >= 0 else "🔴"
-        st.sidebar.markdown(f"**{nm}** {color} `{clpr:,.2f}` ({fltRt:+.2f}%)")
-
-    st.sidebar.divider()
-
-    # 마지막 업데이트 시각
-    meta = _get_meta()
-    if meta:
-        st.sidebar.caption(f"🔄 데이터 업데이트: {meta.get('last_exported_at', '-')}")
-    st.sidebar.caption("⚠️ 시세는 전일 종가 기준 (T+1)")
-
-
-# ── UI: 메인 테이블 ───────────────────────────────────────────────────────────
-
-def render_surge_table(df: pd.DataFrame, surge_reasons: dict):
-    st.subheader("🚀 급등주 랭킹 (전일 종가 기준, T+1)")
-
+def render_chart(ticker, name):
+    df = get_ohlcv(ticker)
     if df.empty:
-        st.warning("공공데이터 API 키가 없거나 데이터 수신 실패.")
+        st.caption("차트 데이터 없음")
         return
+    df["MA5"]  = df["Close"].rolling(5).mean()
+    df["MA20"] = df["Close"].rolling(20).mean()
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                        row_heights=[0.75, 0.25], vertical_spacing=0.02)
+    fig.add_trace(go.Candlestick(
+        x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
+        name="가격", increasing_line_color="#f85149", decreasing_line_color="#58a6ff",
+        increasing_fillcolor="#f85149", decreasing_fillcolor="#58a6ff"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df["MA5"],  name="MA5",
+                             line=dict(color="#3fb950", width=1.2, dash="dot")), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df["MA20"], name="MA20",
+                             line=dict(color="#e3b341", width=1.5)), row=1, col=1)
+    close_v = df["Close"].values.flatten()
+    open_v  = df["Open"].values.flatten()
+    colors  = ["#f85149" if c >= o else "#58a6ff" for c, o in zip(close_v, open_v)]
+    fig.add_trace(go.Bar(x=df.index, y=df["Volume"].values.flatten(),
+                         name="거래량", marker_color=colors, opacity=0.6), row=2, col=1)
+    fig.update_layout(
+        template="plotly_dark", height=420, margin=dict(l=0, r=0, t=30, b=0),
+        title=dict(text=f"{name} ({ticker}) - 6개월 (15분 지연)", font=dict(size=13), x=0),
+        xaxis_rangeslider_visible=False, legend=dict(orientation="h", y=1.08, x=0),
+        paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
+    fig.update_yaxes(gridcolor="#21262d")
+    fig.update_xaxes(gridcolor="#21262d")
+    st.plotly_chart(fig, use_container_width=True)
 
-    # 급등 이유 컬럼 추가
-    def _reason(row) -> str:
-        ticker = str(row["srtnCd"]).zfill(6)
-        db = surge_reasons.get(ticker, {})
-        return db.get("reason", "") if isinstance(db, dict) else ""
 
-    df = df.copy()
-    df["급등이유"] = df.apply(_reason, axis=1)
+@st.cache_data(ttl=1800)
+def get_dart(ticker):
+    if not DART_API_KEY: return []
+    try:
+        end = datetime.now()
+        r = requests.get("https://opendart.fss.or.kr/api/list.json", params={
+            "crtfc_key": DART_API_KEY, "stock_code": ticker,
+            "bgn_de": (end - timedelta(days=60)).strftime("%Y%m%d"),
+            "end_de": end.strftime("%Y%m%d"), "page_count": 20}, timeout=10)
+        d = r.json()
+        return d.get("list", []) if d.get("status") == "000" else []
+    except: return []
 
-    # 표시용 포맷
-    df_display = df.rename(columns={
-        "rank": "순위", "srtnCd": "종목코드", "itmsNm": "종목명",
-        "mrktCtg": "시장", "clpr": "종가", "fltRt": "등락률(%)",
-        "trqu": "거래량", "basDt": "기준일",
-    })
 
-    selected = st.dataframe(
-        df_display,
-        use_container_width=True,
-        hide_index=True,
-        on_select="rerun",
-        selection_mode="single-row",
-    )
+def render_sidebar(indices):
+    with st.sidebar:
+        st.markdown("### 📊 시장 지수 (T+1)")
+        for nm, it in indices.items():
+            try:
+                clpr  = float(it.get("clpr", 0))
+                fltRt = float(it.get("fltRt", 0))
+                sign  = "▲" if fltRt >= 0 else "▼"
+                cls   = "up" if fltRt >= 0 else "down"
+                st.markdown(
+                    f"<div class='metric-card'><div class='metric-label'>{nm}</div>"
+                    f"<div class='metric-value'>{clpr:,.2f} "
+                    f"<span class='{cls}'>{sign} {abs(fltRt):.2f}%</span></div></div>",
+                    unsafe_allow_html=True)
+            except: pass
+        st.divider()
+        meta = get_meta()
+        if meta: st.caption(f"🔄 수집: {meta.get('last_exported_at', '-')}")
+        st.caption("⚠️ 전일 종가 기준 (T+1)")
+        st.caption("📈 차트: yfinance (15분 지연)")
+
+
+def render_table(df, surge_reasons):
+    if df.empty:
+        st.warning("공공데이터 API 응답 없음.")
+        return None
+    disp = df[["순위", "srtnCd", "itmsNm", "mrktCtg", "clpr", "fltRt", "trqu", "basDt"]].copy()
+    disp["급등이유"] = disp["srtnCd"].apply(
+        lambda t: surge_reasons.get(str(t).zfill(6), {}).get("reason", "")
+        if isinstance(surge_reasons.get(str(t).zfill(6), {}), dict) else "")
+    disp = disp.rename(columns={"srtnCd": "종목코드", "itmsNm": "종목명", "mrktCtg": "시장",
+        "clpr": "종가", "fltRt": "등락률(%)", "trqu": "거래량", "basDt": "기준일"})
+    selected = st.dataframe(disp, use_container_width=True, hide_index=True,
+        on_select="rerun", selection_mode="single-row",
+        column_config={
+            "순위":      st.column_config.NumberColumn(width="small"),
+            "등락률(%)": st.column_config.NumberColumn(format="%.2f%%", width="small"),
+            "거래량":    st.column_config.NumberColumn(format="%d"),
+            "급등이유":  st.column_config.TextColumn(width="large")})
     return selected, df
 
 
-# ── UI: 종목 상세 ─────────────────────────────────────────────────────────────
-
-def render_stock_detail(ticker: str, name: str, rsi_snapshot: dict, cb_overhang: dict):
+def render_detail(ticker, name, rsi_snapshot, cb_overhang):
     st.divider()
-    st.subheader(f"📋 {name} ({ticker}) 상세")
-
-    col1, col2, col3 = st.columns(3)
-
-    # RSI 정보
-    rsi_daily = rsi_snapshot.get(f"{ticker}_daily", {})
-    rsi_weekly = rsi_snapshot.get(f"{ticker}_1wk", {})
-    with col1:
-        st.markdown("**RSI (일봉)**")
-        if rsi_daily:
-            st.metric("RSI", f"{rsi_daily.get('rsi', '-')}", rsi_daily.get('signal', ''))
-        else:
-            st.caption("데이터 없음")
-    with col2:
-        st.markdown("**RSI (주봉)**")
-        if rsi_weekly:
-            st.metric("RSI", f"{rsi_weekly.get('rsi', '-')}", rsi_weekly.get('signal', ''))
-        else:
-            st.caption("데이터 없음")
-
-    # CB/BW 오버행
-    with col3:
-        st.markdown("**CB/BW 미상환**")
-        overhang = cb_overhang.get(ticker)
-        if overhang:
-            st.warning("⚠️ 오버행 데이터 있음")
-        else:
-            st.success("✅ 오버행 데이터 없음")
-
-    # 가격 차트
-    st.markdown("**📈 6개월 주가 (yfinance, 15분 지연)**")
-    price_df = get_price_history(ticker)
-    if not price_df.empty:
-        st.line_chart(price_df["Close"])
+    st.markdown(f"<div class='section-title'>📋 {name} ({ticker})</div>", unsafe_allow_html=True)
+    c1, c2, c3, c4 = st.columns(4)
+    for col, label, key in [(c1, "RSI 일봉", "_daily"), (c2, "RSI 주봉", "_1wk"), (c3, "RSI 5분봉", "_5m")]:
+        data = rsi_snapshot.get(f"{ticker}{key}", {})
+        with col:
+            v   = data.get("rsi", "-")
+            sig = data.get("signal", "")
+            st.markdown(
+                f"<div class='metric-card'><div class='metric-label'>{label}</div>"
+                f"<div class='metric-value'>{v}</div>"
+                f"<div style='font-size:0.8em;color:#8b949e'>{sig}</div></div>",
+                unsafe_allow_html=True)
+    with c4:
+        has   = bool(cb_overhang.get(ticker))
+        lbl   = "⚠️ 오버행 있음" if has else "✅ 오버행 없음"
+        color = "#f85149" if has else "#3fb950"
+        st.markdown(
+            f"<div class='metric-card'><div class='metric-label'>CB/BW 오버행</div>"
+            f"<div class='metric-value' style='color:{color}'>{lbl}</div></div>",
+            unsafe_allow_html=True)
+    render_chart(ticker, name)
+    st.markdown("<div class='section-title'>📋 DART 공시 (최근 60일)</div>", unsafe_allow_html=True)
+    _TYPE = {"A": "정기공시", "B": "주요사항", "C": "발행공시", "D": "지분공시",
+             "E": "기타", "F": "외부감사", "I": "거래소공시"}
+    items = get_dart(ticker)
+    if items:
+        rows = [{"날짜": it.get("rcept_dt", "")[:8],
+                 "구분": _TYPE.get(it.get("pblntf_ty", ""), it.get("pblntf_ty", "")),
+                 "제목": it.get("report_nm", ""), "제출인": it.get("flr_nm", "")} for it in items]
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
     else:
-        st.caption("차트 데이터 없음 (yfinance)")
+        st.caption("최근 공시 없음")
 
 
-# ── DART 공시 ────────────────────────────────────────────────────────────────
-
-@st.cache_data(ttl=1800)
-def get_dart_disclosures(ticker: str, days: int = 30) -> list:
-    """DART API로 최근 공시 목록 조회."""
-    if not DART_API_KEY:
-        return []
-    end_dt = datetime.now()
-    start_dt = end_dt - timedelta(days=days)
-    params = {
-        "crtfc_key": DART_API_KEY,
-        "stock_code": ticker,
-        "bgn_de": start_dt.strftime("%Y%m%d"),
-        "end_de": end_dt.strftime("%Y%m%d"),
-        "page_count": 20,
-    }
-    try:
-        r = requests.get("https://opendart.fss.or.kr/api/list.json", params=params, timeout=10)
-        data = r.json()
-        if data.get("status") != "000":
-            return []
-        return data.get("list", [])
-    except Exception as e:
-        log.error(f"[dart] {ticker}: {e}")
-        return []
-
-
-def render_dart_tab(ticker: str, name: str):
-    st.subheader(f"📋 DART 공시 — {name} ({ticker}), 최근 30일")
-    if not ticker:
-        st.info("급등주 랭킹에서 종목을 먼저 선택하세요.")
-        return
-    if not DART_API_KEY:
-        st.warning("DART_API_KEY가 설정되지 않았습니다.")
-        return
-
-    items = get_dart_disclosures(ticker)
-    if not items:
-        st.info("최근 30일 공시 없음.")
-        return
-
-    _TYPE_LABEL = {
-        "A": "정기공시", "B": "주요사항보고", "C": "발행공시",
-        "D": "지분공시", "E": "기타공시", "F": "외부감사관련",
-        "G": "펀드공시", "H": "자산유동화", "I": "거래소공시", "J": "공정위공시",
-    }
-    rows = []
-    for it in items:
-        rows.append({
-            "날짜": it.get("rcept_dt", "")[:8],
-            "구분": _TYPE_LABEL.get(it.get("pblntf_ty", ""), it.get("pblntf_ty", "")),
-            "제목": it.get("report_nm", ""),
-            "제출인": it.get("flr_nm", ""),
-        })
-    df = pd.DataFrame(rows)
-    st.dataframe(df, use_container_width=True, hide_index=True)
-
-
-# ── UI: 테마뉴스 탭 ──────────────────────────────────────────────────────────
-
-def render_theme_news(news_items: list):
-    st.subheader("📰 테마뉴스 (infostock, Project 1 수집)")
+def render_news(news_items):
     if not news_items:
-        st.info("테마뉴스 데이터가 없습니다. Project 1 Export를 먼저 실행하세요.")
+        st.info("테마뉴스 없음. Project 1 데몬이 실행 중인지 확인하세요.")
         return
-
     for item in news_items[:30]:
-        title   = item.get("title", "")
-        body    = item.get("body", "")
-        date_   = item.get("date", "")[:10] if item.get("date") else ""
-        label   = item.get("label", "")
-        with st.expander(f"[{date_}] {title}"):
-            if label:
-                st.caption(label)
+        title = item.get("title", "")
+        body  = item.get("text") or item.get("content") or item.get("body", "")
+        dt    = str(item.get("sendDate") or item.get("date", ""))[:10]
+        with st.expander(f"[{dt}] {title}"):
             if body:
-                st.markdown(body[:500] + ("..." if len(body) > 500 else ""))
+                st.markdown(str(body)[:600] + ("..." if len(str(body)) > 600 else ""))
 
-
-# ── 메인 ──────────────────────────────────────────────────────────────────────
 
 def main():
     st.title("📈 급등주 모멘텀 대시보드 (공개)")
-    st.caption("합법 데이터 소스 전용: 금융위원회 공공API + DART + yfinance + GitHub 공유 데이터")
-
-    # 사전 로드
-    indices      = get_market_indices()
-    surge_df     = get_surge_ranking()
+    st.caption("금융위원회 공공API · DART · yfinance · GitHub 공유데이터")
+    if "sel_ticker" not in st.session_state:
+        st.session_state.sel_ticker = ""
+        st.session_state.sel_name   = ""
+    indices       = get_indices()
+    surge_df      = get_surge_ranking()
     surge_reasons = get_surge_reasons()
-    rsi_snapshot = get_rsi_snapshot()
-    cb_overhang  = get_cb_overhang()
-    theme_news   = get_theme_news()
-
+    rsi_snapshot  = get_rsi_snapshot()
+    cb_overhang   = get_cb_overhang()
+    theme_news    = get_theme_news()
     render_sidebar(indices)
-
-    # 선택 종목 session_state 유지
-    if "selected_ticker" not in st.session_state:
-        st.session_state.selected_ticker = ""
-        st.session_state.selected_name   = ""
-
-    tab_surge, tab_dart, tab_theme = st.tabs(["🚀 급등주 랭킹", "📋 DART 공시", "📰 테마뉴스"])
-
-    with tab_surge:
-        result = render_surge_table(surge_df, surge_reasons)
+    tab1, tab2 = st.tabs(["🚀 급등주 랭킹", "📰 테마뉴스"])
+    with tab1:
+        st.markdown("<div class='section-title'>🚀 급등주 랭킹 - 전일 종가 기준 (T+1)</div>", unsafe_allow_html=True)
+        result = render_table(surge_df, surge_reasons)
         if result:
             selected, df = result
             rows = selected.selection.rows if hasattr(selected, "selection") else []
             if rows:
                 row = df.iloc[rows[0]]
-                st.session_state.selected_ticker = str(row["srtnCd"]).zfill(6)
-                st.session_state.selected_name   = row["itmsNm"]
-            if st.session_state.selected_ticker:
-                render_stock_detail(
-                    st.session_state.selected_ticker,
-                    st.session_state.selected_name,
-                    rsi_snapshot, cb_overhang,
-                )
-
-    with tab_dart:
-        render_dart_tab(st.session_state.selected_ticker, st.session_state.selected_name)
-
-    with tab_theme:
-        render_theme_news(theme_news)
+                st.session_state.sel_ticker = str(row["srtnCd"]).zfill(6)
+                st.session_state.sel_name   = row["itmsNm"]
+            if st.session_state.sel_ticker:
+                render_detail(st.session_state.sel_ticker, st.session_state.sel_name,
+                              rsi_snapshot, cb_overhang)
+    with tab2:
+        st.markdown("<div class='section-title'>📰 테마뉴스 (infostock 수집)</div>", unsafe_allow_html=True)
+        render_news(theme_news)
 
 
 if __name__ == "__main__":
