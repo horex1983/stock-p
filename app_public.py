@@ -11,6 +11,7 @@ from plotly.subplots import make_subplots
 import yfinance as yf
 from datetime import datetime, timedelta, date
 from dotenv import load_dotenv
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, JsCode
 
 load_dotenv()
 
@@ -83,6 +84,12 @@ def get_meta():
     d = _github_json("data/_meta.json")
     return d if isinstance(d, dict) else {}
 
+def get_watchlist():
+    d = _github_json("data/watchlist.json")
+    if isinstance(d, list): return d
+    if isinstance(d, dict): return d.get("items", d.get("tickers", []))
+    return []
+
 
 _PUB = "https://apis.data.go.kr/1160100/service"
 
@@ -107,7 +114,8 @@ def _latest_biz_date():
 
 
 @st.cache_data(ttl=3600)
-def get_surge_ranking(top_n=50):
+def _get_all_stocks_raw():
+    """Fetch all stocks for the latest business date (shared by surge ranking and watchlist)."""
     bas_dt = _latest_biz_date()
     body = _pub("GetStockSecuritiesInfoService/getStockPriceInfo",
                 {"numOfRows": 3000, "pageNo": 1, "basDt": bas_dt})
@@ -119,12 +127,25 @@ def get_surge_ranking(top_n=50):
     for col in ["fltRt", "trqu", "clpr"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    return df
+
+
+def get_surge_ranking(top_n=50):
+    df = _get_all_stocks_raw()
+    if df.empty: return pd.DataFrame()
     excl = ["ETF", "ETN", "SPAC", "인버스", "레버리지", "선물", "합성"]
     df = df[~df["itmsNm"].str.contains("|".join(excl), na=False)]
     df = df[(df["trqu"] >= 100_000) & (df["fltRt"] > 0)]
     df = df.sort_values("fltRt", ascending=False).head(top_n).reset_index(drop=True)
     df.insert(0, "순위", df.index + 1)
     return df
+
+
+def get_watchlist_prices(codes):
+    df = _get_all_stocks_raw()
+    if df.empty or not codes: return pd.DataFrame()
+    codes_padded = [str(c).zfill(6) for c in codes]
+    return df[df["srtnCd"].isin(codes_padded)].copy().reset_index(drop=True)
 
 
 @st.cache_data(ttl=3600)
@@ -198,6 +219,90 @@ def get_dart(ticker):
     except: return []
 
 
+# --- AgGrid dark theme config ---
+
+_AGGRID_CSS = {
+    "#gridToolBar":          {"display": "none"},
+    ".ag-root-wrapper":      {"background": "#161b22 !important",
+                              "border": "1px solid #30363d !important",
+                              "border-radius": "8px"},
+    ".ag-header":            {"background": "#0d1117 !important",
+                              "border-bottom": "1px solid #30363d !important"},
+    ".ag-header-cell":       {"background": "#0d1117 !important"},
+    ".ag-header-cell-label": {"color": "#8b949e !important", "font-size": "0.82em"},
+    ".ag-row":               {"background": "#161b22 !important",
+                              "border-color": "#21262d !important"},
+    ".ag-row-hover":         {"background": "#1c2333 !important"},
+    ".ag-row-selected":      {"background": "#1f3a5f !important"},
+    ".ag-cell":              {"color": "#f0f6fc !important"},
+    ".ag-body-viewport":     {"background": "#161b22 !important"},
+    ".ag-paging-panel":      {"background": "#0d1117 !important",
+                              "color": "#8b949e !important",
+                              "border-top": "1px solid #30363d !important"},
+}
+
+_CELL_FLTRT = JsCode("""
+function(params) {
+    if (params.value > 0) return {color: '#f85149', fontWeight: 'bold'};
+    if (params.value < 0) return {color: '#58a6ff', fontWeight: 'bold'};
+    return {color: '#8b949e'};
+}
+""")
+
+
+def _build_aggrid(disp_df, height=520, has_rank=True):
+    gb = GridOptionsBuilder.from_dataframe(disp_df)
+    gb.configure_default_column(
+        resizable=True, sortable=True, filter=False,
+        cellStyle={"color": "#f0f6fc", "backgroundColor": "transparent"})
+
+    col_cfg = {
+        "순위":       dict(width=60,  pinned="left"),
+        "종목코드":   dict(width=90),
+        "종목명":     dict(width=120),
+        "시장":       dict(width=72),
+        "종가":       dict(width=92,  type=["numericColumn"],
+                          valueFormatter="x.toLocaleString()"),
+        "등락률(%)":  dict(width=90,  type=["numericColumn"],
+                          valueFormatter="x.toFixed(2)+'%'",
+                          cellStyle=_CELL_FLTRT),
+        "거래량":     dict(width=112, type=["numericColumn"],
+                          valueFormatter="x.toLocaleString()"),
+        "기준일":     dict(width=90),
+        "급등이유":   dict(flex=1),
+    }
+    for col, kwargs in col_cfg.items():
+        if col in disp_df.columns:
+            gb.configure_column(col, **kwargs)
+
+    gb.configure_selection(selection_mode="single", use_checkbox=False)
+    gb.configure_grid_options(rowHeight=32, headerHeight=36,
+                               suppressMovableColumns=True,
+                               pagination=True, paginationPageSize=25)
+    return AgGrid(
+        disp_df,
+        gridOptions=gb.build(),
+        theme="alpine",
+        update_mode=GridUpdateMode.SELECTION_CHANGED,
+        allow_unsafe_jscode=True,
+        use_container_width=True,
+        height=height,
+        custom_css=_AGGRID_CSS,
+    )
+
+
+def _get_selected_row(resp):
+    """Safely extract the first selected row as a dict from an AgGrid response."""
+    sel = resp.get("selected_rows", None)
+    if sel is None:
+        return None
+    if hasattr(sel, "iloc"):        # pandas DataFrame (newer streamlit-aggrid)
+        return sel.iloc[0].to_dict() if len(sel) > 0 else None
+    if isinstance(sel, list):       # list of dicts (older streamlit-aggrid)
+        return sel[0] if len(sel) > 0 else None
+    return None
+
+
 def render_sidebar(indices):
     with st.sidebar:
         st.markdown("### 📊 시장 지수 (T+1)")
@@ -230,14 +335,7 @@ def render_table(df, surge_reasons):
         if isinstance(surge_reasons.get(str(t).zfill(6), {}), dict) else "")
     disp = disp.rename(columns={"srtnCd": "종목코드", "itmsNm": "종목명", "mrktCtg": "시장",
         "clpr": "종가", "fltRt": "등락률(%)", "trqu": "거래량", "basDt": "기준일"})
-    selected = st.dataframe(disp, use_container_width=True, hide_index=True,
-        on_select="rerun", selection_mode="single-row",
-        column_config={
-            "순위":      st.column_config.NumberColumn(width="small"),
-            "등락률(%)": st.column_config.NumberColumn(format="%.2f%%", width="small"),
-            "거래량":    st.column_config.NumberColumn(format="%d"),
-            "급등이유":  st.column_config.TextColumn(width="large")})
-    return selected, df
+    return _build_aggrid(disp), df
 
 
 def render_detail(ticker, name, rsi_snapshot, cb_overhang):
@@ -292,32 +390,72 @@ def render_news(news_items):
 def main():
     st.title("📈 급등주 모멘텀 대시보드 (공개)")
     st.caption("금융위원회 공공API · DART · yfinance · GitHub 공유데이터")
-    if "sel_ticker" not in st.session_state:
-        st.session_state.sel_ticker = ""
-        st.session_state.sel_name   = ""
+
+    for key, val in [("sel_ticker_surge", ""), ("sel_name_surge", ""),
+                     ("sel_ticker_watch", ""), ("sel_name_watch", "")]:
+        if key not in st.session_state:
+            st.session_state[key] = val
+
     indices       = get_indices()
     surge_df      = get_surge_ranking()
     surge_reasons = get_surge_reasons()
     rsi_snapshot  = get_rsi_snapshot()
     cb_overhang   = get_cb_overhang()
     theme_news    = get_theme_news()
+    watchlist     = get_watchlist()
+
     render_sidebar(indices)
-    tab1, tab2 = st.tabs(["🚀 급등주 랭킹", "📰 테마뉴스"])
+
+    tab1, tab2, tab3 = st.tabs(["🚀 급등주 랭킹", "⭐ 관심종목", "📰 테마뉴스"])
+
     with tab1:
-        st.markdown("<div class='section-title'>🚀 급등주 랭킹 - 전일 종가 기준 (T+1)</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>🚀 급등주 랭킹 - 전일 종가 기준 (T+1)</div>",
+                    unsafe_allow_html=True)
         result = render_table(surge_df, surge_reasons)
         if result:
-            selected, df = result
-            rows = selected.selection.rows if hasattr(selected, "selection") else []
-            if rows:
-                row = df.iloc[rows[0]]
-                st.session_state.sel_ticker = str(row["srtnCd"]).zfill(6)
-                st.session_state.sel_name   = row["itmsNm"]
-            if st.session_state.sel_ticker:
-                render_detail(st.session_state.sel_ticker, st.session_state.sel_name,
+            resp, df = result
+            row_data = _get_selected_row(resp)
+            if row_data:
+                ticker = str(row_data.get("종목코드", "")).zfill(6)
+                name   = row_data.get("종목명", "")
+                if ticker:
+                    st.session_state.sel_ticker_surge = ticker
+                    st.session_state.sel_name_surge   = name
+            if st.session_state.sel_ticker_surge:
+                render_detail(st.session_state.sel_ticker_surge,
+                              st.session_state.sel_name_surge,
                               rsi_snapshot, cb_overhang)
+
     with tab2:
-        st.markdown("<div class='section-title'>📰 테마뉴스 (infostock 수집)</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>⭐ 관심종목 - 전일 종가 기준 (T+1)</div>",
+                    unsafe_allow_html=True)
+        if not watchlist:
+            st.info("관심종목 없음. Project 1에서 관심종목을 등록하세요.")
+        else:
+            wdf = get_watchlist_prices(watchlist)
+            if wdf.empty:
+                st.warning("관심종목 시세 조회 실패.")
+            else:
+                disp = wdf[["srtnCd", "itmsNm", "mrktCtg", "clpr", "fltRt", "trqu", "basDt"]].copy()
+                disp = disp.rename(columns={"srtnCd": "종목코드", "itmsNm": "종목명",
+                    "mrktCtg": "시장", "clpr": "종가", "fltRt": "등락률(%)",
+                    "trqu": "거래량", "basDt": "기준일"})
+                resp_w = _build_aggrid(disp, height=400, has_rank=False)
+                row_data_w = _get_selected_row(resp_w)
+                if row_data_w:
+                    ticker = str(row_data_w.get("종목코드", "")).zfill(6)
+                    name   = row_data_w.get("종목명", "")
+                    if ticker:
+                        st.session_state.sel_ticker_watch = ticker
+                        st.session_state.sel_name_watch   = name
+                if st.session_state.sel_ticker_watch:
+                    render_detail(st.session_state.sel_ticker_watch,
+                                  st.session_state.sel_name_watch,
+                                  rsi_snapshot, cb_overhang)
+
+    with tab3:
+        st.markdown("<div class='section-title'>📰 테마뉴스 (infostock 수집)</div>",
+                    unsafe_allow_html=True)
         render_news(theme_news)
 
 
