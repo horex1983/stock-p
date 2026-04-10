@@ -217,10 +217,26 @@ def get_dart(ticker):
     except: return []
 
 
+def _tier(flt_rt):
+    """Return tier badge based on daily change rate."""
+    try:
+        v = float(flt_rt)
+    except (TypeError, ValueError):
+        return "D"
+    if v >= 20: return "🏆 S"
+    if v >= 15: return "🟢 A"
+    if v >= 10: return "🟡 B"
+    if v >=  7: return "🟠 C"
+    return "🔴 D"
+
+
 def _make_display_df(df, surge_reasons=None):
     cols = ["순위", "srtnCd", "itmsNm", "mrktCtg", "clpr", "fltRt", "trqu", "basDt"]
     cols = [c for c in cols if c in df.columns]
     disp = df[cols].copy()
+    if "fltRt" in disp.columns:
+        disp.insert(disp.columns.get_loc("fltRt") + 1, "티어",
+                    disp["fltRt"].apply(_tier))
     if surge_reasons is not None:
         disp["급등이유"] = disp["srtnCd"].apply(
             lambda t: surge_reasons.get(str(t).zfill(6), {}).get("reason", "")
@@ -247,19 +263,31 @@ def render_sidebar(indices):
                     unsafe_allow_html=True)
             except: pass
         st.divider()
+        st.markdown("### 🔍 필터")
+        market_filter = st.radio("시장 구분", ["전체", "KOSPI", "KOSDAQ"],
+                                  horizontal=True, label_visibility="collapsed")
+        st.divider()
         meta = get_meta()
         if meta: st.caption(f"🔄 수집: {meta.get('last_exported_at', '-')}")
         st.caption("⚠️ 전일 종가 기준 (T+1)")
         st.caption("📈 차트: yfinance (15분 지연)")
+        if st.button("🔄 데이터 새로고침", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+    return market_filter
 
 
-def render_table(df, surge_reasons):
+def render_table(df, surge_reasons, market_filter="전체"):
     if df.empty:
         st.warning("공공데이터 API 응답 없음.")
         return None
-    disp = _make_display_df(df, surge_reasons)
+    filtered = df.copy()
+    if market_filter != "전체":
+        filtered = filtered[filtered["mrktCtg"].str.upper() == market_filter.upper()]
+    disp = _make_display_df(filtered, surge_reasons)
     col_cfg = {
         "순위":      st.column_config.NumberColumn(width="small"),
+        "티어":      st.column_config.TextColumn(width="small"),
         "등락률(%)": st.column_config.NumberColumn(format="%.2f%%", width="small"),
         "거래량":    st.column_config.NumberColumn(format="%d"),
         "급등이유":  st.column_config.TextColumn(width="large"),
@@ -267,7 +295,7 @@ def render_table(df, surge_reasons):
     selected = st.dataframe(disp, use_container_width=True, hide_index=True,
                             on_select="rerun", selection_mode="single-row",
                             column_config=col_cfg)
-    return selected, df
+    return selected, filtered
 
 
 def render_watchlist_table(wdf):
@@ -398,14 +426,14 @@ def main():
     theme_news    = get_theme_news()
     watchlist     = get_watchlist()
 
-    render_sidebar(indices)
+    market_filter = render_sidebar(indices)
 
     tab1, tab2, tab3 = st.tabs(["🚀 급등주 랭킹", "⭐ 관심종목", "📰 테마뉴스"])
 
     with tab1:
         st.markdown("<div class='section-title'>🚀 급등주 랭킹 - 전일 종가 기준 (T+1)</div>",
                     unsafe_allow_html=True)
-        result = render_table(surge_df, surge_reasons)
+        result = render_table(surge_df, surge_reasons, market_filter)
         if result:
             selected, df = result
             rows = selected.selection.rows if hasattr(selected, "selection") else []
