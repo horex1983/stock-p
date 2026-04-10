@@ -146,6 +146,22 @@ def get_watchlist_prices(codes):
     return df[df["srtnCd"].isin(codes_padded)].copy().reset_index(drop=True)
 
 
+def get_stock_extra(ticker):
+    """Return extra daily stats (open/high/low/trading value) from raw data."""
+    df = _get_all_stocks_raw()
+    if df.empty: return {}
+    row = df[df["srtnCd"] == str(ticker).zfill(6)]
+    if row.empty: return {}
+    r = row.iloc[0]
+    result = {}
+    for col, key in [("mkp", "시가"), ("hipr", "고가"), ("lopr", "저가"),
+                     ("trPrc", "거래대금"), ("mrktTotAmt", "시가총액")]:
+        if col in r.index:
+            try: result[key] = int(float(r[col]))
+            except: pass
+    return result
+
+
 @st.cache_data(ttl=3600)
 def get_indices():
     bas_dt = _latest_biz_date()
@@ -284,6 +300,13 @@ def render_table(df, surge_reasons, market_filter="전체"):
     filtered = df.copy()
     if market_filter != "전체":
         filtered = filtered[filtered["mrktCtg"].str.upper() == market_filter.upper()]
+    # Search box
+    search = st.text_input("🔍 종목 검색", placeholder="종목명 또는 코드 입력",
+                            label_visibility="collapsed")
+    if search:
+        mask = (filtered["itmsNm"].str.contains(search, na=False) |
+                filtered["srtnCd"].str.contains(search, na=False))
+        filtered = filtered[mask]
     disp = _make_display_df(filtered, surge_reasons)
     col_cfg = {
         "순위":      st.column_config.NumberColumn(width="small"),
@@ -369,6 +392,22 @@ def _rsi_gauge(label, rsi_val, signal):
 def render_detail(ticker, name, rsi_snapshot, cb_overhang):
     st.divider()
     st.markdown(f"<div class='section-title'>📋 {name} ({ticker})</div>", unsafe_allow_html=True)
+
+    # Row 1: extra daily stats
+    extra = get_stock_extra(ticker)
+    if extra:
+        ec = st.columns(len(extra))
+        labels = {"시가": "시가", "고가": "고가", "저가": "저가",
+                  "거래대금": "거래대금", "시가총액": "시가총액"}
+        for i, (lbl, val) in enumerate(extra.items()):
+            with ec[i]:
+                fmt = f"{val:,}"
+                st.markdown(
+                    f"<div class='metric-card'><div class='metric-label'>{lbl}</div>"
+                    f"<div class='metric-value' style='font-size:0.95em'>{fmt}</div></div>",
+                    unsafe_allow_html=True)
+
+    # Row 2: RSI gauges + overhang
     c1, c2, c3, c4 = st.columns(4)
     for col, label, key in [(c1, "RSI 일봉", "_daily"), (c2, "RSI 주봉", "_1wk"), (c3, "RSI 5분봉", "_5m")]:
         data = rsi_snapshot.get(f"{ticker}{key}", {})
@@ -400,7 +439,16 @@ def render_news(news_items):
     if not news_items:
         st.info("테마뉴스 없음. Project 1 데몬이 실행 중인지 확인하세요.")
         return
-    for item in news_items[:30]:
+    kw = st.text_input("🔍 키워드 필터", placeholder="예: 반도체, AI, 바이오",
+                        label_visibility="collapsed")
+    filtered = news_items
+    if kw:
+        kw_lower = kw.lower()
+        filtered = [it for it in news_items
+                    if kw_lower in str(it.get("title", "")).lower()
+                    or kw_lower in str(it.get("text") or it.get("content") or it.get("body", "")).lower()]
+    st.caption(f"총 {len(filtered)}건")
+    for item in filtered[:30]:
         title = item.get("title", "")
         body  = item.get("text") or item.get("content") or item.get("body", "")
         dt    = str(item.get("sendDate") or item.get("date", ""))[:10]
