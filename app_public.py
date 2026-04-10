@@ -90,6 +90,99 @@ def get_watchlist():
     if isinstance(d, dict): return d.get("items", d.get("tickers", []))
     return []
 
+def get_surge_table():
+    """P1 exported surge table (tier/theme/risk already computed)."""
+    d = _github_json("data/surge_table.json")
+    return d if isinstance(d, list) else []
+
+def get_indices_p1():
+    """P1 exported index data: KOSPI/KOSDAQ/NASDAQ/S&P500 + disparity."""
+    d = _github_json("data/indices.json")
+    return d if isinstance(d, dict) else {}
+
+def get_krx_listing():
+    """P1 exported KRX full listing for stock search."""
+    d = _github_json("data/krx_listing.json")
+    return d if isinstance(d, list) else []
+
+def get_accumulated_news():
+    """Return (surge_items, theme_items) split by category from accumulated.json."""
+    d = _github_json("data/accumulated.json")
+    items = d.get("items", []) if isinstance(d, dict) else []
+    surge = [it for it in items if it.get("category", "") == "특징 상한가 및 급등종목"]
+    theme = [it for it in items if it.get("category", "") == "특징 테마"]
+    return surge, theme
+
+
+# ── 특징주/테마 파싱 (P1 infostock_crawler.py 동일 로직) ──────────────────────
+
+_ACTION = r'(?:상한가|급등|급락|강세|약세|상승|하락|반등)'
+
+def _parse_body_entries(text: str) -> list:
+    """Parse 특징주 body text → [{name, code, rate, reason}, ...]"""
+    parts = re.split(r'\n?\s*\(([0-9A-Z]{6})\)', text)
+    results = []
+    n = (len(parts) - 1) // 2
+    for i in range(n):
+        code = parts[2 * i + 1]
+        body = (parts[2 * i + 2] if 2 * i + 2 < len(parts) else "").strip()
+        prev = parts[2 * i]
+        if i == 0:
+            name = ""
+            for line in reversed([l.strip() for l in prev.split('\n') if l.strip()]):
+                if re.search(r'\d+[원%]|\([+\-]', line):
+                    continue
+                clean = re.sub(r'^.*?사유', '', line).strip() or line
+                if re.search(r'[가-힣]', clean):
+                    name = clean; break
+        else:
+            m = re.search(_ACTION + r'([A-Za-z가-힣\u4e00-\u9fff·&]{1,10})\s*$', prev)
+            if m:
+                name = m.group(1)
+            else:
+                name = ""
+                for line in reversed([l.strip() for l in prev.split('\n') if l.strip()]):
+                    if re.search(r'\d+[원%]|\([+\-]', line):
+                        continue
+                    if re.search(r'[가-힣]', line):
+                        candidate = re.sub(_ACTION + r'.*', '', line).strip()
+                        if len(candidate) <= 12:
+                            name = candidate
+                        break
+        rate_match = re.search(r'\([+\-][\d.]+%\)', body)
+        rate_str = rate_match.group(0) if rate_match else ''
+        if rate_match:
+            after = body[rate_match.end():].strip()
+            after = re.sub(r'^(\d)(\d{4}[년])', r'\2', after)
+            after = re.sub(r'^(\d)(?=[가-힣])', '', after).strip()
+            after = re.sub(r'^\d\n', '', after).strip()
+            after = re.sub(
+                _ACTION + r'([A-Za-z가-힣\u4e00-\u9fff·&(]+)$',
+                lambda m: m.group(0)[:m.group(0).index(m.group(1))], after.strip())
+            after = re.sub(
+                r'(상한가|급등|급락|강세|약세|상승|하락|반등)\n+[가-힣A-Za-z\u4e00-\u9fff·&]+\s*$',
+                r'\1', after)
+            reason = after.strip()
+        else:
+            reason = body.strip()
+        results.append({'name': name, 'code': code, 'rate': rate_str, 'reason': reason})
+    return results
+
+def _parse_theme_entries(text: str) -> list:
+    """Extract ▷ bullet entries from 특징테마 body text."""
+    idx = text.find('테마시황')
+    if idx == -1:
+        return [l.strip() for l in text.split('\n') if l.strip().startswith('▷')]
+    sub = text[idx:]
+    results = []
+    for line in sub.split('\n'):
+        line = line.strip()
+        if line.startswith('▷'):
+            results.append(line)
+        elif results and line and not line.startswith('▷'):
+            break
+    return results
+
 
 def _github_put(path, content_str):
     """Write/update a file in the GitHub repo. Returns True on success."""
@@ -364,23 +457,42 @@ def _make_display_df(df, surge_reasons=None):
     return disp
 
 
-def render_sidebar(indices):
+def render_sidebar(indices_pub, indices_p1, surge_items, theme_items):
     with st.sidebar:
-        st.markdown("### 📊 시장 지수 (T+1)")
-        for nm, it in indices.items():
-            try:
-                clpr  = float(it.get("clpr", 0))
-                fltRt = float(it.get("fltRt", 0))
-                sign  = "▲" if fltRt >= 0 else "▼"
-                cls   = "up" if fltRt >= 0 else "down"
-                st.markdown(
-                    f"<div class='metric-card'><div class='metric-label'>{nm}</div>"
-                    f"<div class='metric-value'>{clpr:,.2f} "
-                    f"<span class='{cls}'>{sign} {abs(fltRt):.2f}%</span></div></div>",
-                    unsafe_allow_html=True)
-            except: pass
+        # ── 시장 지수 ────────────────────────────────────────────────────────
+        st.markdown("### 📊 시장 지수")
+        # P1 indices (real-time via FDR) — KOSPI/KOSDAQ/NASDAQ/S&P500
+        if indices_p1:
+            for nm, it in indices_p1.items():
+                try:
+                    close = float(it.get("close", 0))
+                    chg   = float(it.get("change_pct", 0))
+                    disp  = it.get("disparity_status", "")
+                    sign  = "▲" if chg >= 0 else "▼"
+                    cls   = "up" if chg >= 0 else "down"
+                    disp_html = f" <span style='font-size:0.75em;color:#8b949e'>{disp}</span>" if disp else ""
+                    st.markdown(
+                        f"<div class='metric-card'><div class='metric-label'>{nm}</div>"
+                        f"<div class='metric-value'>{close:,.2f}"
+                        f"<span class='{cls}'> {sign}{abs(chg):.2f}%</span>{disp_html}</div></div>",
+                        unsafe_allow_html=True)
+                except: pass
+        else:
+            # Fallback: public API (T+1, KOSPI/KOSDAQ/KOSPI200만)
+            for nm, it in indices_pub.items():
+                try:
+                    clpr  = float(it.get("clpr", 0))
+                    fltRt = float(it.get("fltRt", 0))
+                    sign  = "▲" if fltRt >= 0 else "▼"
+                    cls   = "up" if fltRt >= 0 else "down"
+                    st.markdown(
+                        f"<div class='metric-card'><div class='metric-label'>{nm}</div>"
+                        f"<div class='metric-value'>{clpr:,.2f} "
+                        f"<span class='{cls}'>{sign} {abs(fltRt):.2f}%</span></div></div>",
+                        unsafe_allow_html=True)
+                except: pass
 
-        # Market breadth
+        # ── 시장 폭 ──────────────────────────────────────────────────────────
         raw = _get_all_stocks_raw()
         if not raw.empty:
             up   = int((raw["fltRt"] > 0).sum())
@@ -397,13 +509,95 @@ def render_sidebar(indices):
                 unsafe_allow_html=True)
 
         st.divider()
+
+        # ── 특징주 / 특징테마 팝오버 ─────────────────────────────────────────
+        if surge_items or theme_items:
+            st.markdown("### 🏷️ 테마 &amp; 뉴스", unsafe_allow_html=True)
+            def _fmt_date(item):
+                raw = item.get("sendDate", "")
+                return f"{raw[:4]}.{raw[4:6]}.{raw[6:]}" if len(raw) == 8 else raw
+
+            col_s, col_t = st.columns(2)
+
+            # 특징주 팝오버
+            with col_s:
+                if "surge_day_idx" not in st.session_state:
+                    st.session_state.surge_day_idx = 0
+                with st.popover("특징주", use_container_width=True):
+                    if surge_items:
+                        c1, c2, c3 = st.columns([1, 4, 1])
+                        cur = st.session_state.surge_day_idx
+                        if c1.button("◀", key="sp_prev",
+                                     disabled=cur >= len(surge_items) - 1):
+                            st.session_state.surge_day_idx = cur + 1
+                        if c3.button("▶", key="sp_next", disabled=cur == 0):
+                            st.session_state.surge_day_idx = cur - 1
+                        idx = min(st.session_state.surge_day_idx, len(surge_items) - 1)
+                        c2.markdown(f"<div style='text-align:center'>{_fmt_date(surge_items[idx])}</div>",
+                                    unsafe_allow_html=True)
+                        entries = _parse_body_entries(surge_items[idx].get("text", ""))
+                        shown = 0
+                        for e in entries:
+                            if re.search(r'스팩|SPAC', e.get('name', ''), re.IGNORECASE): continue
+                            if re.search(r'신규\s*상장|상장\s*첫날|상장일', e.get('reason', '')): continue
+                            try:
+                                rv = float(re.search(r'[+\-]?([\d.]+)%', e['rate']).group(1))
+                            except: rv = 0.0
+                            if rv < 15.0: continue
+                            rate_html = f'<span style="color:#f85149">{e["rate"]}</span>'
+                            st.markdown(f"**{e['name']}** {rate_html} : {e['reason']}",
+                                        unsafe_allow_html=True)
+                            shown += 1
+                        if shown == 0:
+                            st.caption("표시할 항목 없음")
+                    else:
+                        st.caption("수집된 데이터 없음")
+
+            # 특징테마 팝오버
+            with col_t:
+                if "theme_day_idx" not in st.session_state:
+                    st.session_state.theme_day_idx = 0
+                with st.popover("특징테마", use_container_width=True):
+                    if theme_items:
+                        c1, c2, c3 = st.columns([1, 4, 1])
+                        cur = st.session_state.theme_day_idx
+                        if c1.button("◀", key="tp_prev",
+                                     disabled=cur >= len(theme_items) - 1):
+                            st.session_state.theme_day_idx = cur + 1
+                        if c3.button("▶", key="tp_next", disabled=cur == 0):
+                            st.session_state.theme_day_idx = cur - 1
+                        idx = min(st.session_state.theme_day_idx, len(theme_items) - 1)
+                        c2.markdown(f"<div style='text-align:center'>{_fmt_date(theme_items[idx])}</div>",
+                                    unsafe_allow_html=True)
+                        entries = _parse_theme_entries(theme_items[idx].get("text", ""))
+                        for e in entries:
+                            st.markdown(f'<span style="color:#f85149;font-weight:bold">▷</span> {e}',
+                                        unsafe_allow_html=True)
+                        if not entries:
+                            st.caption("수집된 데이터 없음")
+                    else:
+                        st.caption("수집된 데이터 없음")
+            st.divider()
+
+        # ── 필터 ─────────────────────────────────────────────────────────────
         st.markdown("### 🔍 필터")
         market_filter = st.radio("시장 구분", ["전체", "KOSPI", "KOSDAQ"],
                                   horizontal=True, label_visibility="collapsed")
         st.divider()
+
+        # ── 시스템 상태 ───────────────────────────────────────────────────────
         meta = get_meta()
-        if meta: st.caption(f"🔄 수집: {meta.get('last_exported_at', '-')}")
-        st.caption("⚠️ 전일 종가 기준 (T+1)")
+        if meta:
+            exported_at = meta.get("last_exported_at", "")
+            try:
+                delta = datetime.now() - datetime.strptime(exported_at, "%Y-%m-%d %H:%M:%S")
+                age_min = delta.total_seconds() / 60
+                p1_icon = "🟢" if age_min < 30 else "🟡" if age_min < 120 else "🔴"
+            except: p1_icon = "🟡"
+            st.markdown(
+                f"<div style='font-size:0.82em;color:#8b949e'>"
+                f"🛠 P1 {p1_icon} &nbsp; 수집: {exported_at[:16] if exported_at else '-'}"
+                f"</div>", unsafe_allow_html=True)
         st.caption("📈 차트: yfinance (15분 지연)")
         if st.button("🔄 데이터 새로고침", use_container_width=True):
             st.cache_data.clear()
@@ -411,7 +605,52 @@ def render_sidebar(indices):
     return market_filter
 
 
+def render_p1_table(surge_table, rsi_snapshot, market_filter="전체"):
+    """Display P1 exported surge table (tier/theme/risk pre-computed by P1)."""
+    df = pd.DataFrame(surge_table)
+    if df.empty:
+        return None
+    df.insert(0, "순위", range(1, len(df) + 1))
+    # RSI signals from rsi_snapshot.json
+    def _sig(t, suffix):
+        d = rsi_snapshot.get(f"{t}{suffix}", {})
+        return d.get("signal", "") if isinstance(d, dict) else ""
+    df["신호"]    = df["종목코드"].apply(lambda t: _sig(t, "_daily"))
+    df["단기신호"] = df["종목코드"].apply(lambda t: _sig(t, "_5m"))
+
+    if market_filter != "전체":
+        df = df[df["시장"] == market_filter]
+
+    search = st.text_input("🔍 종목 검색", placeholder="종목명 또는 코드 입력",
+                            label_visibility="collapsed")
+    if search:
+        mask = (df["종목명"].str.contains(search, na=False) |
+                df["종목코드"].str.contains(search, na=False))
+        df = df[mask]
+
+    disp_cols = ["순위", "종목코드", "종목명", "시장", "현재가", "당일등락",
+                 "7일누적", "거래대금", "tier", "테마", "신호", "단기신호", "리스크"]
+    disp = df[[c for c in disp_cols if c in df.columns]].copy()
+    col_cfg = {
+        "순위":    st.column_config.NumberColumn(width="small"),
+        "tier":   st.column_config.TextColumn("티어", width="small"),
+        "현재가":  st.column_config.NumberColumn(format="%d", width="small"),
+        "당일등락": st.column_config.NumberColumn(label="당일등락(%)", format="%.2f%%", width="small"),
+        "7일누적": st.column_config.NumberColumn(label="7일누적(%)", format="%.2f%%", width="small"),
+        "거래대금": st.column_config.NumberColumn(label="거래대금(억)", format="%.1f", width="small"),
+        "테마":    st.column_config.TextColumn(width="medium"),
+        "신호":    st.column_config.TextColumn(width="small"),
+        "단기신호": st.column_config.TextColumn("단기신호", width="small"),
+        "리스크":  st.column_config.TextColumn(width="small"),
+    }
+    selected = st.dataframe(disp, use_container_width=True, hide_index=True,
+                            on_select="rerun", selection_mode="single-row",
+                            column_config=col_cfg)
+    return selected, df
+
+
 def render_table(df, surge_reasons, market_filter="전체"):
+    """Fallback table using public API data (when P1 surge_table unavailable)."""
     if df.empty:
         st.warning("공공데이터 API 응답 없음.")
         return None
@@ -683,33 +922,52 @@ def main():
         if key not in st.session_state:
             st.session_state[key] = val
 
-    indices       = get_indices()
-    surge_df      = get_surge_ranking()
+    indices_pub   = get_indices()
+    indices_p1    = get_indices_p1()
+    surge_table   = get_surge_table()
+    surge_df      = get_surge_ranking() if not surge_table else pd.DataFrame()
     surge_reasons = get_surge_reasons()
     rsi_snapshot  = get_rsi_snapshot()
     cb_overhang   = get_cb_overhang()
-    theme_news    = get_theme_news()
     watchlist     = get_watchlist()
+    surge_items, theme_items = get_accumulated_news()
+    theme_news    = surge_items + theme_items  # all items for 테마뉴스 탭
 
-    market_filter = render_sidebar(indices)
+    market_filter = render_sidebar(indices_pub, indices_p1, surge_items, theme_items)
 
-    tab1, tab2, tab3 = st.tabs(["🚀 급등주 랭킹", "⭐ 관심종목", "📰 테마뉴스"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🚀 급등주 랭킹", "⭐ 관심종목", "🔍 종목검색", "📰 테마뉴스"])
 
     with tab1:
-        st.markdown("<div class='section-title'>🚀 급등주 랭킹 - 전일 종가 기준 (T+1)</div>",
-                    unsafe_allow_html=True)
-        result = render_table(surge_df, surge_reasons, market_filter)
-        if result:
-            selected, df = result
-            rows = selected.selection.rows if hasattr(selected, "selection") else []
-            if rows:
-                row = df.iloc[rows[0]]
-                st.session_state.sel_ticker_surge = str(row["srtnCd"]).zfill(6)
-                st.session_state.sel_name_surge   = row["itmsNm"]
-            if st.session_state.sel_ticker_surge:
-                render_detail(st.session_state.sel_ticker_surge,
-                              st.session_state.sel_name_surge,
-                              rsi_snapshot, cb_overhang, surge_reasons)
+        if surge_table:
+            st.markdown("<div class='section-title'>🚀 급등주 랭킹 — P1 실시간 데이터</div>",
+                        unsafe_allow_html=True)
+            result = render_p1_table(surge_table, rsi_snapshot, market_filter)
+            if result:
+                selected, df_p1 = result
+                rows = selected.selection.rows if hasattr(selected, "selection") else []
+                if rows:
+                    row = df_p1.iloc[rows[0]]
+                    st.session_state.sel_ticker_surge = str(row["종목코드"]).zfill(6)
+                    st.session_state.sel_name_surge   = row["종목명"]
+                if st.session_state.sel_ticker_surge:
+                    render_detail(st.session_state.sel_ticker_surge,
+                                  st.session_state.sel_name_surge,
+                                  rsi_snapshot, cb_overhang, surge_reasons)
+        else:
+            st.markdown("<div class='section-title'>🚀 급등주 랭킹 - 공공 API (T+1)</div>",
+                        unsafe_allow_html=True)
+            result = render_table(surge_df, surge_reasons, market_filter)
+            if result:
+                selected, df = result
+                rows = selected.selection.rows if hasattr(selected, "selection") else []
+                if rows:
+                    row = df.iloc[rows[0]]
+                    st.session_state.sel_ticker_surge = str(row["srtnCd"]).zfill(6)
+                    st.session_state.sel_name_surge   = row["itmsNm"]
+                if st.session_state.sel_ticker_surge:
+                    render_detail(st.session_state.sel_ticker_surge,
+                                  st.session_state.sel_name_surge,
+                                  rsi_snapshot, cb_overhang, surge_reasons)
 
     with tab2:
         st.markdown("<div class='section-title'>⭐ 관심종목 - 전일 종가 기준 (T+1)</div>",
@@ -763,9 +1021,39 @@ def main():
                     if st.session_state.sel_ticker_watch:
                         render_detail(st.session_state.sel_ticker_watch,
                                       st.session_state.sel_name_watch,
-                                      rsi_snapshot, cb_overhang)
+                                      rsi_snapshot, cb_overhang, surge_reasons)
 
     with tab3:
+        st.markdown("<div class='section-title'>🔍 종목검색</div>", unsafe_allow_html=True)
+        srch = st.text_input("검색어", placeholder="예: 삼성전자 / 005930",
+                              label_visibility="collapsed", key="stock_search_input")
+        krx = get_krx_listing()
+        if not krx:
+            st.info("종목 목록을 불러오는 중... P1이 krx_listing.json을 export하지 않았을 수 있습니다.")
+        elif srch.strip():
+            df_krx = pd.DataFrame(krx)
+            q = srch.strip()
+            if q.isdigit():
+                result_krx = df_krx[df_krx["종목코드"].str.startswith(q.zfill(max(len(q), 4)))]
+            else:
+                result_krx = df_krx[df_krx["종목명"].str.contains(q, case=False, na=False)]
+            result_krx = result_krx.head(30).reset_index(drop=True)
+            if result_krx.empty:
+                st.info("검색 결과 없음")
+            else:
+                sel_krx = st.dataframe(result_krx, use_container_width=True, hide_index=True,
+                                       on_select="rerun", selection_mode="single-row")
+                rows_krx = sel_krx.selection.rows if hasattr(sel_krx, "selection") else []
+                if rows_krx:
+                    r = result_krx.iloc[rows_krx[0]]
+                    st.session_state.sel_ticker_surge = str(r["종목코드"]).zfill(6)
+                    st.session_state.sel_name_surge   = r["종목명"]
+                if st.session_state.get("sel_ticker_surge"):
+                    render_detail(st.session_state.sel_ticker_surge,
+                                  st.session_state.sel_name_surge,
+                                  rsi_snapshot, cb_overhang, surge_reasons)
+
+    with tab4:
         st.markdown("<div class='section-title'>📰 테마뉴스 (infostock 수집)</div>",
                     unsafe_allow_html=True)
         render_news(theme_news)
