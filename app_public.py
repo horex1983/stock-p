@@ -29,6 +29,10 @@ st.markdown("""
 .down { color: #58a6ff !important; }
 .section-title { color: #f0f6fc; font-size: 1.05em; font-weight: 700;
     border-left: 3px solid #238636; padding-left: 8px; margin: 16px 0 8px 0; }
+/* 데이터프레임 다크 테마 */
+[data-testid="stDataFrame"] > div { background: #161b22 !important; }
+[data-testid="stDataFrame"] iframe { background: #161b22 !important; }
+.dvn-scroller { background: #161b22 !important; }
 </style>""", unsafe_allow_html=True)
 
 
@@ -130,13 +134,16 @@ def get_surge_ranking(top_n=50):
 @st.cache_data(ttl=3600)
 def get_indices():
     bas_dt = _latest_biz_date()
-    body = _pub("GetMarketIndexInfoService/getStockMarketIndex",
-                {"numOfRows": 50, "pageNo": 1, "basDt": bas_dt})
-    if not body: return {}
-    raw = body.get("items", {}).get("item", [])
-    items = raw if isinstance(raw, list) else [raw]
-    return {it["idxNm"]: it for it in items
-            if it.get("idxNm") in ("코스피", "코스닥", "코스피 200")}
+    result = {}
+    for nm in ("코스피", "코스닥", "코스피 200"):
+        body = _pub("GetMarketIndexInfoService/getStockMarketIndex",
+                    {"numOfRows": 1, "pageNo": 1, "basDt": bas_dt, "idxNm": nm})
+        if not body: continue
+        raw = body.get("items", {}).get("item", [])
+        items = raw if isinstance(raw, list) else [raw]
+        if items:
+            result[nm] = items[0]
+    return result
 
 
 @st.cache_data(ttl=900)
