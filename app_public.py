@@ -11,7 +11,6 @@ from plotly.subplots import make_subplots
 import yfinance as yf
 from datetime import datetime, timedelta, date
 from dotenv import load_dotenv
-from st_aggrid import AgGrid, GridOptionsBuilder, JsCode
 
 load_dotenv()
 
@@ -115,7 +114,6 @@ def _latest_biz_date():
 
 @st.cache_data(ttl=3600)
 def _get_all_stocks_raw():
-    """Fetch all stocks for the latest business date (shared by surge ranking and watchlist)."""
     bas_dt = _latest_biz_date()
     body = _pub("GetStockSecuritiesInfoService/getStockPriceInfo",
                 {"numOfRows": 3000, "pageNo": 1, "basDt": bas_dt})
@@ -219,87 +217,18 @@ def get_dart(ticker):
     except: return []
 
 
-# --- AgGrid dark theme config ---
-
-_AGGRID_CSS = {
-    "#gridToolBar":          {"display": "none"},
-    ".ag-root-wrapper":      {"background": "#161b22 !important",
-                              "border": "1px solid #30363d !important",
-                              "border-radius": "8px"},
-    ".ag-header":            {"background": "#0d1117 !important",
-                              "border-bottom": "1px solid #30363d !important"},
-    ".ag-header-cell":       {"background": "#0d1117 !important"},
-    ".ag-header-cell-label": {"color": "#8b949e !important", "font-size": "0.82em"},
-    ".ag-row":               {"background": "#161b22 !important",
-                              "border-color": "#21262d !important"},
-    ".ag-row-hover":         {"background": "#1c2333 !important"},
-    ".ag-row-selected":      {"background": "#1f3a5f !important"},
-    ".ag-cell":              {"color": "#f0f6fc !important"},
-    ".ag-body-viewport":     {"background": "#161b22 !important"},
-    ".ag-paging-panel":      {"background": "#0d1117 !important",
-                              "color": "#8b949e !important",
-                              "border-top": "1px solid #30363d !important"},
-}
-
-_CELL_FLTRT = JsCode("""
-function(params) {
-    if (params.value > 0) return {color: '#f85149', fontWeight: 'bold'};
-    if (params.value < 0) return {color: '#58a6ff', fontWeight: 'bold'};
-    return {color: '#8b949e'};
-}
-""")
-
-
-def _build_aggrid(disp_df, height=520, has_rank=True):
-    gb = GridOptionsBuilder.from_dataframe(disp_df)
-    gb.configure_default_column(
-        resizable=True, sortable=True, filter=False,
-        cellStyle={"color": "#f0f6fc", "backgroundColor": "transparent"})
-
-    col_cfg = {
-        "순위":       dict(width=60,  pinned="left"),
-        "종목코드":   dict(width=90),
-        "종목명":     dict(width=120),
-        "시장":       dict(width=72),
-        "종가":       dict(width=92,  type=["numericColumn"],
-                          valueFormatter="x.toLocaleString()"),
-        "등락률(%)":  dict(width=90,  type=["numericColumn"],
-                          valueFormatter="x.toFixed(2)+'%'",
-                          cellStyle=_CELL_FLTRT),
-        "거래량":     dict(width=112, type=["numericColumn"],
-                          valueFormatter="x.toLocaleString()"),
-        "기준일":     dict(width=90),
-        "급등이유":   dict(flex=1),
-    }
-    for col, kwargs in col_cfg.items():
-        if col in disp_df.columns:
-            gb.configure_column(col, **kwargs)
-
-    gb.configure_selection(selection_mode="single", use_checkbox=False)
-    gb.configure_grid_options(rowHeight=32, headerHeight=36,
-                               suppressMovableColumns=True,
-                               pagination=True, paginationPageSize=25)
-    return AgGrid(
-        disp_df,
-        gridOptions=gb.build(),
-        theme="alpine",
-        allow_unsafe_jscode=True,
-        use_container_width=True,
-        height=height,
-        custom_css=_AGGRID_CSS,
-    )
-
-
-def _get_selected_row(resp):
-    """Safely extract the first selected row as a dict from an AgGrid response."""
-    sel = resp.get("selected_rows", None)
-    if sel is None:
-        return None
-    if hasattr(sel, "iloc"):        # pandas DataFrame (newer streamlit-aggrid)
-        return sel.iloc[0].to_dict() if len(sel) > 0 else None
-    if isinstance(sel, list):       # list of dicts (older streamlit-aggrid)
-        return sel[0] if len(sel) > 0 else None
-    return None
+def _make_display_df(df, surge_reasons=None):
+    cols = ["순위", "srtnCd", "itmsNm", "mrktCtg", "clpr", "fltRt", "trqu", "basDt"]
+    cols = [c for c in cols if c in df.columns]
+    disp = df[cols].copy()
+    if surge_reasons is not None:
+        disp["급등이유"] = disp["srtnCd"].apply(
+            lambda t: surge_reasons.get(str(t).zfill(6), {}).get("reason", "")
+            if isinstance(surge_reasons.get(str(t).zfill(6), {}), dict) else "")
+    disp = disp.rename(columns={
+        "srtnCd": "종목코드", "itmsNm": "종목명", "mrktCtg": "시장",
+        "clpr": "종가", "fltRt": "등락률(%)", "trqu": "거래량", "basDt": "기준일"})
+    return disp
 
 
 def render_sidebar(indices):
@@ -328,13 +257,29 @@ def render_table(df, surge_reasons):
     if df.empty:
         st.warning("공공데이터 API 응답 없음.")
         return None
-    disp = df[["순위", "srtnCd", "itmsNm", "mrktCtg", "clpr", "fltRt", "trqu", "basDt"]].copy()
-    disp["급등이유"] = disp["srtnCd"].apply(
-        lambda t: surge_reasons.get(str(t).zfill(6), {}).get("reason", "")
-        if isinstance(surge_reasons.get(str(t).zfill(6), {}), dict) else "")
-    disp = disp.rename(columns={"srtnCd": "종목코드", "itmsNm": "종목명", "mrktCtg": "시장",
-        "clpr": "종가", "fltRt": "등락률(%)", "trqu": "거래량", "basDt": "기준일"})
-    return _build_aggrid(disp), df
+    disp = _make_display_df(df, surge_reasons)
+    col_cfg = {
+        "순위":      st.column_config.NumberColumn(width="small"),
+        "등락률(%)": st.column_config.NumberColumn(format="%.2f%%", width="small"),
+        "거래량":    st.column_config.NumberColumn(format="%d"),
+        "급등이유":  st.column_config.TextColumn(width="large"),
+    }
+    selected = st.dataframe(disp, use_container_width=True, hide_index=True,
+                            on_select="rerun", selection_mode="single-row",
+                            column_config=col_cfg)
+    return selected, df
+
+
+def render_watchlist_table(wdf):
+    disp = _make_display_df(wdf)
+    col_cfg = {
+        "등락률(%)": st.column_config.NumberColumn(format="%.2f%%", width="small"),
+        "거래량":    st.column_config.NumberColumn(format="%d"),
+    }
+    selected = st.dataframe(disp, use_container_width=True, hide_index=True,
+                            on_select="rerun", selection_mode="single-row",
+                            column_config=col_cfg)
+    return selected, wdf
 
 
 def render_detail(ticker, name, rsi_snapshot, cb_overhang):
@@ -412,14 +357,12 @@ def main():
                     unsafe_allow_html=True)
         result = render_table(surge_df, surge_reasons)
         if result:
-            resp, df = result
-            row_data = _get_selected_row(resp)
-            if row_data:
-                ticker = str(row_data.get("종목코드", "")).zfill(6)
-                name   = row_data.get("종목명", "")
-                if ticker:
-                    st.session_state.sel_ticker_surge = ticker
-                    st.session_state.sel_name_surge   = name
+            selected, df = result
+            rows = selected.selection.rows if hasattr(selected, "selection") else []
+            if rows:
+                row = df.iloc[rows[0]]
+                st.session_state.sel_ticker_surge = str(row["srtnCd"]).zfill(6)
+                st.session_state.sel_name_surge   = row["itmsNm"]
             if st.session_state.sel_ticker_surge:
                 render_detail(st.session_state.sel_ticker_surge,
                               st.session_state.sel_name_surge,
@@ -435,22 +378,18 @@ def main():
             if wdf.empty:
                 st.warning("관심종목 시세 조회 실패.")
             else:
-                disp = wdf[["srtnCd", "itmsNm", "mrktCtg", "clpr", "fltRt", "trqu", "basDt"]].copy()
-                disp = disp.rename(columns={"srtnCd": "종목코드", "itmsNm": "종목명",
-                    "mrktCtg": "시장", "clpr": "종가", "fltRt": "등락률(%)",
-                    "trqu": "거래량", "basDt": "기준일"})
-                resp_w = _build_aggrid(disp, height=400, has_rank=False)
-                row_data_w = _get_selected_row(resp_w)
-                if row_data_w:
-                    ticker = str(row_data_w.get("종목코드", "")).zfill(6)
-                    name   = row_data_w.get("종목명", "")
-                    if ticker:
-                        st.session_state.sel_ticker_watch = ticker
-                        st.session_state.sel_name_watch   = name
-                if st.session_state.sel_ticker_watch:
-                    render_detail(st.session_state.sel_ticker_watch,
-                                  st.session_state.sel_name_watch,
-                                  rsi_snapshot, cb_overhang)
+                result_w = render_watchlist_table(wdf)
+                if result_w:
+                    selected_w, wdf2 = result_w
+                    rows_w = selected_w.selection.rows if hasattr(selected_w, "selection") else []
+                    if rows_w:
+                        row_w = wdf2.iloc[rows_w[0]]
+                        st.session_state.sel_ticker_watch = str(row_w["srtnCd"]).zfill(6)
+                        st.session_state.sel_name_watch   = row_w["itmsNm"]
+                    if st.session_state.sel_ticker_watch:
+                        render_detail(st.session_state.sel_ticker_watch,
+                                      st.session_state.sel_name_watch,
+                                      rsi_snapshot, cb_overhang)
 
     with tab3:
         st.markdown("<div class='section-title'>📰 테마뉴스 (infostock 수집)</div>",

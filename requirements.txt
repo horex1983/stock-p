@@ -4,4 +4,3 @@ requests
 yfinance
 python-dotenv
 plotly
-streamlit-aggrid
