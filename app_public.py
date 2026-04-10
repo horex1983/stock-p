@@ -6,6 +6,7 @@ app_public.py — 급등주 모멘텀 대시보드 (공개 배포용)
 import os, json, base64, logging, requests, re
 from collections import Counter
 import streamlit as st
+import streamlit.components.v1 as _components
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -447,39 +448,76 @@ def _make_display_df(df, surge_reasons=None):
 
 
 def render_sidebar(indices_pub, indices_p1, surge_items, theme_items):
-    with st.sidebar:
-        # ── 시장 지수 ────────────────────────────────────────────────────────
-        st.markdown("### 📊 시장 지수")
-        # P1 indices (real-time via FDR) — KOSPI/KOSDAQ/NASDAQ/S&P500
-        if indices_p1:
-            for nm, it in indices_p1.items():
-                try:
-                    close = float(it.get("close", 0))
-                    chg   = float(it.get("change_pct", 0))
-                    disp  = it.get("disparity_status", "")
-                    sign  = "▲" if chg >= 0 else "▼"
-                    cls   = "up" if chg >= 0 else "down"
-                    disp_html = f" <span style='font-size:0.75em;color:#8b949e'>{disp}</span>" if disp else ""
-                    st.markdown(
-                        f"<div class='metric-card'><div class='metric-label'>{nm}</div>"
-                        f"<div class='metric-value'>{close:,.2f}"
-                        f"<span class='{cls}'> {sign}{abs(chg):.2f}%</span>{disp_html}</div></div>",
-                        unsafe_allow_html=True)
-                except: pass
+    def _idx_card(label, close_val, chg, status_txt, border_color):
+        close_str = f"{close_val:,.2f}" if close_val else "-"
+        if chg is None:
+            chg_color, arrow, chg_str = "#aaa", "", "-"
         else:
-            # Fallback: public API (T+1, KOSPI/KOSDAQ/KOSPI200만)
-            for nm, it in indices_pub.items():
-                try:
-                    clpr  = float(it.get("clpr", 0))
-                    fltRt = float(it.get("fltRt", 0))
-                    sign  = "▲" if fltRt >= 0 else "▼"
-                    cls   = "up" if fltRt >= 0 else "down"
-                    st.markdown(
-                        f"<div class='metric-card'><div class='metric-label'>{nm}</div>"
-                        f"<div class='metric-value'>{clpr:,.2f} "
-                        f"<span class='{cls}'>{sign} {abs(fltRt):.2f}%</span></div></div>",
-                        unsafe_allow_html=True)
-                except: pass
+            chg_color = "#c62828" if chg >= 0 else "#1565c0"
+            arrow = "▲" if chg >= 0 else "▼"
+            chg_str = f"{arrow}{abs(chg):.2f}%"
+        status_row = (f"<div style='font-size:0.8em;color:#777;margin-top:2px;'>{status_txt}</div>"
+                      if status_txt else "")
+        return (
+            f"<div style='border-left:3px solid {border_color};background:#FAFBFD;"
+            f"border-radius:0 8px 8px 0;padding:8px 10px;margin-bottom:6px;'>"
+            f"<div style='font-size:0.75em;font-weight:700;color:#888;letter-spacing:0.5px;'>{label}</div>"
+            f"<div style='font-size:1.25em;font-weight:700;color:#1a1a1a;line-height:1.3;'>{close_str}</div>"
+            f"<div style='font-size:1.1em;font-weight:700;color:{chg_color};'>{chg_str}</div>"
+            f"{status_row}</div>"
+        )
+
+    with st.sidebar:
+        # ── 디지털 시계 ──────────────────────────────────────────────────────
+        _components.html(
+            """
+            <div style='padding:10px 10px 8px;background:#1E2D4E;border-radius:8px;text-align:center;'>
+              <div id='clk' style='font-size:2.6em;font-weight:700;color:#E8ECF4;
+                   letter-spacing:4px;font-family:monospace;line-height:1.2;'>--:--:--</div>
+              <div id='dat' style='font-size:0.85em;color:#8FA0C0;margin-top:4px;'>----.--.-- (-)</div>
+            </div>
+            <script>
+            var DAYS=['일','월','화','수','목','금','토'];
+            function pad(n){return String(n).padStart(2,'0');}
+            function tick(){
+                var n=new Date();
+                document.getElementById('clk').textContent=pad(n.getHours())+':'+pad(n.getMinutes())+':'+pad(n.getSeconds());
+                document.getElementById('dat').textContent=n.getFullYear()+'.'+pad(n.getMonth()+1)+'.'+pad(n.getDate())+' ('+DAYS[n.getDay()]+')';
+            }
+            tick(); setInterval(tick,1000);
+            </script>
+            """,
+            height=110,
+        )
+
+        # ── 시장 지수 ────────────────────────────────────────────────────────
+        st.markdown(
+            "<div style='margin:8px 0 6px;padding-bottom:5px;border-bottom:1px solid #E8ECF4;'>"
+            "<strong>🧭 시장지수 현황</strong></div>",
+            unsafe_allow_html=True)
+
+        if indices_p1:
+            _r1c1, _r1c2 = st.columns(2)
+            _idx = {k: v for k, v in indices_p1.items() if isinstance(v, dict)}
+
+            def _get(name):
+                it = _idx.get(name, {})
+                return (float(it.get("close", 0) or 0),
+                        float(it.get("change_pct", 0) or 0),
+                        it.get("disparity_status", ""))
+
+            ks_c, ks_chg, ks_st = _get("KOSPI")
+            kq_c, kq_chg, kq_st = _get("KOSDAQ")
+            nd_c, nd_chg, _     = _get("NASDAQ")
+            sp_c, sp_chg, _     = _get("S&P500")
+
+            _r1c1.markdown(_idx_card("KOSPI",  ks_c, ks_chg, ks_st, "#1565C0"), unsafe_allow_html=True)
+            _r1c2.markdown(_idx_card("KOSDAQ", kq_c, kq_chg, kq_st, "#E65100"), unsafe_allow_html=True)
+            _r2c1, _r2c2 = st.columns(2)
+            _r2c1.markdown(_idx_card("NASDAQ", nd_c, nd_chg, "", "#2E7D32"), unsafe_allow_html=True)
+            _r2c2.markdown(_idx_card("S&P500", sp_c, sp_chg, "", "#2E7D32"), unsafe_allow_html=True)
+        else:
+            st.caption("지수 데이터 없음 (P1 미수집)")
 
         # ── 시장 폭 ──────────────────────────────────────────────────────────
         breadth = get_market_breadth()
