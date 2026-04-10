@@ -866,104 +866,164 @@ def _rsi_gauge(label, rsi_val, signal):
 
 def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
     st.divider()
-    st.markdown(f"<div class='section-title'>📋 {name} ({ticker})</div>", unsafe_allow_html=True)
 
-    # Surge reason banner
+    # ── 헤더: P1 스타일 ──────────────────────────────────────────────────────
+    _hdr_col, _nv_col = st.columns([5, 1])
+    _hdr_col.markdown(f"### 🛡️ {name} ({ticker}) 분석 리포트")
+    _nv_col.link_button(
+        "🌐 네이버 분석",
+        f"https://finance.naver.com/item/main.naver?code={ticker}",
+        use_container_width=True,
+    )
+
+    # ── 데이터 수집 ──────────────────────────────────────────────────────────
+    corp    = get_corp_info(ticker)
+    ohlcv   = get_ohlcv(ticker)
+    _st     = get_surge_table()
+    _row    = next((r for r in _st if str(r.get("종목코드", "")).zfill(6) == str(ticker).zfill(6)), {})
+
+    # 현재가
+    cur_price = float(_row.get("현재가", 0) or corp.get("현재가", 0) or 0)
+    if cur_price == 0 and not ohlcv.empty:
+        try: cur_price = float(ohlcv["Close"].iloc[-1])
+        except: pass
+
+    # 등락률·7일누적
+    daily_chg = float(_row.get("당일등락", 0) or 0)
+    week_chg  = float(_row.get("7일누적",  0) or 0)
+    mktcap    = corp.get("시가총액", "") or ""
+
+    chg_color  = "#c62828" if daily_chg >= 0 else "#1565c0"
+    chg_sign   = "▲"       if daily_chg >= 0 else "▼"
+    week_color = "#c62828" if week_chg  >= 0 else "#1565c0"
+    week_sign  = "▲"       if week_chg  >= 0 else "▼"
+
+    # ── 핵심 요약 카드 (P1 동일 스타일) ─────────────────────────────────────
+    st.markdown(
+        f"<div style='background:#f8f9fa;border-radius:12px;padding:16px 20px;margin-bottom:10px;'>"
+        f"<div style='display:flex;align-items:flex-end;gap:28px;flex-wrap:wrap;'>"
+        f"<div><div style='font-size:0.75em;color:#999;'>시가총액</div>"
+        f"<div style='font-size:1.6em;font-weight:700;'>{mktcap if mktcap else 'N/A'}</div></div>"
+        f"<div><div style='font-size:0.75em;color:#999;'>현재가</div>"
+        f"<div style='font-size:1.6em;font-weight:700;'>{int(cur_price):,}원 "
+        f"<span style='font-size:0.55em;color:{chg_color};'>{chg_sign}{abs(daily_chg):.2f}%</span></div></div>"
+        f"<div><div style='font-size:0.75em;color:#999;'>7일 누적</div>"
+        f"<div style='font-size:1.3em;font-weight:600;color:{week_color};'>{week_sign}{abs(week_chg):.1f}%</div></div>"
+        f"</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    # ── 급등 사유 배너 ───────────────────────────────────────────────────────
     if surge_reasons:
         reason_data = surge_reasons.get(str(ticker).zfill(6), {})
         reason_txt  = reason_data.get("reason", "") if isinstance(reason_data, dict) else ""
         if reason_txt:
             st.info(f"📌 급등이유: {reason_txt}")
 
-    # Row 1: extra daily stats + 6개월 고저  (P1 corp_info.json)
-    corp  = get_corp_info(ticker)
-    extra = {k: v for k, v in corp.items()
-             if k in ("시가", "고가", "저가", "거래대금", "시가총액") and v}
-    ohlcv = get_ohlcv(ticker)
-    if not ohlcv.empty:
-        hi_6m = float(ohlcv["High"].max())
-        lo_6m = float(ohlcv["Low"].min())
-        cur   = float(ohlcv["Close"].iloc[-1])
-        pos   = (cur - lo_6m) / (hi_6m - lo_6m) * 100 if hi_6m != lo_6m else 0
-        extra["6개월 고가"] = int(hi_6m)
-        extra["6개월 저가"] = int(lo_6m)
-        extra["고저위치"]  = f"{pos:.0f}%"
+    # ── 1:2 좌우 컬럼 (P1 구조) ─────────────────────────────────────────────
+    col_left, col_right = st.columns([1, 2])
 
-    if extra:
-        ec = st.columns(len(extra))
-        for i, (lbl, val) in enumerate(extra.items()):
-            with ec[i]:
-                fmt = f"{val:,}" if isinstance(val, int) else str(val)
-                color = ""
-                if lbl == "고저위치":
-                    pct = float(str(val).replace("%", ""))
-                    color = ("color:#d32f2f" if pct >= 70
-                             else "color:#1565c0" if pct <= 30
-                             else "color:#2e7d32")
+    # ── 왼쪽 패널 ────────────────────────────────────────────────────────────
+    with col_left:
+        outline = corp.get("outline", {})
+        fin     = corp.get("financial", {})
+
+        # 기업정보 · 재무요약 expander
+        if outline or fin:
+            with st.expander("📊 기업정보 · 재무요약", expanded=True):
+                if outline:
+                    for field, label in [("sicNm", "업종"), ("enpEstbDt", "설립일"),
+                                         ("enpEmpeCnt", "직원수"), ("enpStacMm", "결산월")]:
+                        val = outline.get(field, "-") or "-"
+                        st.markdown(
+                            f"<div style='display:flex;justify-content:space-between;"
+                            f"padding:4px 0;border-bottom:1px solid #f0f0f0;font-size:0.88em;'>"
+                            f"<span style='color:#888;'>{label}</span>"
+                            f"<span style='font-weight:600;'>{val}</span></div>",
+                            unsafe_allow_html=True)
+                if fin:
+                    biz_year = fin.get("bizYear", "")
+                    st.caption(f"재무 기준: {biz_year}년")
+                    for field, label in [("enpSaleAmt", "매출액"), ("enpBzopPft", "영업이익"),
+                                         ("enpCrtmNpf", "순이익"), ("fnclDebtRto", "부채비율")]:
+                        raw_val = fin.get(field, "-")
+                        try:
+                            v = float(raw_val)
+                            fmt = f"{v:.1f}%" if label == "부채비율" else f"{v:,.0f}"
+                        except (TypeError, ValueError):
+                            fmt = str(raw_val) if raw_val else "-"
+                        color_style = ""
+                        if label == "영업이익":
+                            try:
+                                color_style = "color:#c62828;" if float(raw_val) >= 0 else "color:#1565c0;"
+                            except: pass
+                        st.markdown(
+                            f"<div style='display:flex;justify-content:space-between;"
+                            f"padding:4px 0;border-bottom:1px solid #f0f0f0;font-size:0.88em;'>"
+                            f"<span style='color:#888;'>{label}</span>"
+                            f"<span style='font-weight:600;{color_style}'>{fmt}</span></div>",
+                            unsafe_allow_html=True)
+
+        # 6개월 고저 위치
+        if not ohlcv.empty:
+            try:
+                hi_6m = float(ohlcv["High"].max())
+                lo_6m = float(ohlcv["Low"].min())
+                pos   = (cur_price - lo_6m) / (hi_6m - lo_6m) * 100 if hi_6m != lo_6m else 0
+                pos_c = "#c62828" if pos >= 70 else ("#1565c0" if pos <= 30 else "#2e7d32")
                 st.markdown(
-                    f"<div class='metric-card'><div class='metric-label'>{lbl}</div>"
-                    f"<div class='metric-value' style='font-size:0.95em;{color}'>{fmt}</div></div>",
+                    f"<div style='background:#f8f9fa;border-radius:8px;padding:10px 12px;margin:8px 0;'>"
+                    f"<div style='font-size:0.78em;color:#888;margin-bottom:6px;'>6개월 고저 위치</div>"
+                    f"<div style='display:flex;justify-content:space-between;font-size:0.82em;color:#666;margin-bottom:4px;'>"
+                    f"<span>저 {int(lo_6m):,}</span><span style='font-weight:700;color:{pos_c};'>{pos:.0f}%</span>"
+                    f"<span>고 {int(hi_6m):,}</span></div>"
+                    f"<div style='background:#ddd;border-radius:4px;height:6px;'>"
+                    f"<div style='background:{pos_c};width:{min(100,max(0,pos)):.0f}%;height:6px;border-radius:4px;'></div>"
+                    f"</div></div>",
                     unsafe_allow_html=True)
+            except: pass
 
-    # Row 2: company outline + financial summary (P1 corp_info.json)
-    outline = corp.get("outline", {})
-    fin     = corp.get("financial", {})
+        st.markdown("---")
 
-    if outline or fin:
-        with st.expander("📊 기업정보 · 재무요약", expanded=False):
-            if outline:
-                oc = st.columns(4)
-                outline_fields = [
-                    ("sicNm",       "업종"),
-                    ("enpEstbDt",   "설립일"),
-                    ("enpEmpeCnt",  "직원수"),
-                    ("enpStacMm",   "결산월"),
-                ]
-                for i, (field, label) in enumerate(outline_fields):
-                    val = outline.get(field, "-") or "-"
-                    with oc[i]:
-                        st.markdown(
-                            f"<div class='metric-card'><div class='metric-label'>{label}</div>"
-                            f"<div class='metric-value' style='font-size:0.9em'>{val}</div></div>",
-                            unsafe_allow_html=True)
-            if fin:
-                biz_year = fin.get("bizYear", "")
-                st.caption(f"재무 기준: {biz_year}년 ({fin.get('fnclDcdNm', '연결/개별 혼합')})")
-                fc = st.columns(4)
-                fin_fields = [
-                    ("enpSaleAmt",  "매출액"),
-                    ("enpBzopPft",  "영업이익"),
-                    ("enpCrtmNpf",  "당기순이익"),
-                    ("fnclDebtRto", "부채비율(%)"),
-                ]
-                for i, (field, label) in enumerate(fin_fields):
-                    raw_val = fin.get(field, "-")
-                    try:
-                        v = float(raw_val)
-                        fmt = f"{v:,.0f}" if label != "부채비율(%)" else f"{v:.1f}%"
-                    except (TypeError, ValueError):
-                        fmt = str(raw_val) if raw_val else "-"
-                    with fc[i]:
-                        st.markdown(
-                            f"<div class='metric-card'><div class='metric-label'>{label}</div>"
-                            f"<div class='metric-value' style='font-size:0.9em'>{fmt}</div></div>",
-                            unsafe_allow_html=True)
+        # RSI 게이지
+        st.markdown("**📊 RSI 신호**")
+        rsi_cols = st.columns(3)
+        for col, label, key in [(rsi_cols[0], "일봉", "_daily"),
+                                 (rsi_cols[1], "주봉", "_1wk"),
+                                 (rsi_cols[2], "5분봉", "_5m")]:
+            data = rsi_snapshot.get(f"{ticker}{key}", {})
+            with col:
+                _rsi_gauge(label, data.get("rsi"), data.get("signal", ""))
 
-    # Row 3: RSI gauges + overhang
-    c1, c2, c3, c4 = st.columns(4)
-    for col, label, key in [(c1, "RSI 일봉", "_daily"), (c2, "RSI 주봉", "_1wk"), (c3, "RSI 5분봉", "_5m")]:
-        data = rsi_snapshot.get(f"{ticker}{key}", {})
-        with col:
-            _rsi_gauge(label, data.get("rsi"), data.get("signal", ""))
-    with c4:
-        has   = bool(cb_overhang.get(ticker))
-        lbl   = "⚠️ 오버행 있음" if has else "✅ 오버행 없음"
-        color = "#f85149" if has else "#3fb950"
-        st.markdown(
-            f"<div class='metric-card'><div class='metric-label'>CB/BW 오버행</div>"
-            f"<div class='metric-value' style='color:{color}'>{lbl}</div></div>",
-            unsafe_allow_html=True)
-    render_chart(ticker, name)
+        st.markdown("---")
+
+        # CB/BW 오버행 (P1 스타일 container)
+        with st.container(border=True):
+            st.markdown("#### 🕵️ CB/BW 잠재 매도 물량")
+            _oh = cb_overhang.get(str(ticker).zfill(6)) or cb_overhang.get(ticker)
+            if _oh and isinstance(_oh, list) and len(_oh) > 0:
+                _active = [b for b in _oh if not b.get("is_expired") and b.get("unredeemed", 0) > 0]
+                if not _active:
+                    st.success("✅ CB/BW 전량 만기상환 또는 전환 완료")
+                else:
+                    _total = sum(b.get("unredeemed", 0) for b in _active)
+                    st.error(f"🚨 미상환잔액 {_total/1e8:.1f}억원 ({len(_active)}건)")
+                    _rows_cb = [{"회차": b.get("series", "-"),
+                                 "잔액(억)": f"{b.get('unredeemed',0)/1e8:.1f}",
+                                 "전환가(원)": f"{b.get('conversion_price',0):,}",
+                                 "전환기간": b.get("conversion_period", "-")} for b in _active]
+                    st.dataframe(pd.DataFrame(_rows_cb), use_container_width=True, hide_index=True)
+            elif _oh:
+                st.warning("⚠️ 오버행 데이터 있음")
+            else:
+                st.success("✅ CB/BW 오버행 없음 (최근 5년)")
+
+    # ── 오른쪽: 캔들 차트 ────────────────────────────────────────────────────
+    with col_right:
+        st.markdown("### 📈 일봉 캔들 차트")
+        render_chart(ticker, name)
+
+    # ── 하단: DART 공시 ──────────────────────────────────────────────────────
     st.markdown("<div class='section-title'>📋 DART 공시 (최근 60일)</div>", unsafe_allow_html=True)
     _TYPE = {"A": "정기공시", "B": "주요사항", "C": "발행공시", "D": "지분공시",
              "E": "기타", "F": "외부감사", "I": "거래소공시"}
