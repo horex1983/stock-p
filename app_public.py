@@ -48,18 +48,31 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 
+import pathlib as _pathlib
+_CACHE_DIR = _pathlib.Path("/tmp/p2_cache")
+_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
 @st.cache_data(ttl=300)
 def _github_json(path):
-    if not GITHUB_TOKEN or not GITHUB_REPO: return None
-    try:
-        r = requests.get(
-            f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}",
-            headers={"Authorization": f"Bearer {GITHUB_TOKEN}",
-                     "Accept": "application/vnd.github+json"},
-            params={"ref": GITHUB_BRANCH}, timeout=10)
-        if r.status_code != 200: return None
-        return json.loads(base64.b64decode(r.json()["content"]).decode())
-    except: return None
+    _file = _CACHE_DIR / path.replace("/", "__")
+    if GITHUB_TOKEN and GITHUB_REPO:
+        try:
+            r = requests.get(
+                f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}",
+                headers={"Authorization": f"Bearer {GITHUB_TOKEN}",
+                         "Accept": "application/vnd.github+json"},
+                params={"ref": GITHUB_BRANCH}, timeout=10)
+            if r.status_code == 200:
+                data = json.loads(base64.b64decode(r.json()["content"]).decode())
+                _file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+                return data
+        except: pass
+    # fallback: last saved local cache
+    if _file.exists():
+        try:
+            return json.loads(_file.read_text(encoding="utf-8"))
+        except: pass
+    return None
 
 
 def get_theme_news():
@@ -517,7 +530,7 @@ def render_sidebar(indices_pub, indices_p1, surge_items, theme_items):
             _r2c1.markdown(_idx_card("NASDAQ", nd_c, nd_chg, "", "#2E7D32"), unsafe_allow_html=True)
             _r2c2.markdown(_idx_card("S&P500", sp_c, sp_chg, "", "#2E7D32"), unsafe_allow_html=True)
         else:
-            st.caption("지수 데이터 없음 (P1 미수집)")
+            pass
 
         # ── 시장 폭 ──────────────────────────────────────────────────────────
         breadth = get_market_breadth()
@@ -573,10 +586,9 @@ def render_sidebar(indices_pub, indices_p1, surge_items, theme_items):
                             st.markdown(f"**{e['name']}** {rate_html} : {e['reason']}",
                                         unsafe_allow_html=True)
                             shown += 1
-                        if shown == 0:
-                            st.caption("표시할 항목 없음")
+                        pass
                     else:
-                        st.caption("수집된 데이터 없음")
+                        pass
 
             # 특징테마 팝오버
             with col_t:
@@ -598,10 +610,9 @@ def render_sidebar(indices_pub, indices_p1, surge_items, theme_items):
                         for e in entries:
                             st.markdown(f'<span style="color:#f85149;font-weight:bold">▷</span> {e}',
                                         unsafe_allow_html=True)
-                        if not entries:
-                            st.caption("수집된 데이터 없음")
+                        pass
                     else:
-                        st.caption("수집된 데이터 없음")
+                        pass
 
         # ── 키워드 워드클라우드 ───────────────────────────────────────────────
         top_kw = _get_top_keywords(surge_items, n=8)
@@ -630,8 +641,7 @@ def render_sidebar(indices_pub, indices_p1, surge_items, theme_items):
                         f"<div style='background:#21262d;border-radius:4px;height:6px;margin-top:4px;'>"
                         f"<div style='background:#1565C0;width:{_bar}%;height:6px;border-radius:4px;'></div>"
                         f"</div></div>", unsafe_allow_html=True)
-                if not _top5:
-                    st.caption("데이터 없음")
+                pass
 
         # ── 휴장일 ───────────────────────────────────────────────────────────
         st.markdown("### 🗓️ 휴장일", unsafe_allow_html=True)
@@ -1051,7 +1061,7 @@ def main():
                                   st.session_state.sel_name_surge,
                                   rsi_snapshot, cb_overhang, surge_reasons)
         else:
-            st.info("P1 데이터 없음. Project 1 데몬이 실행 중인지 확인하세요.")
+            pass
 
     with tab2:
         st.markdown("<div class='section-title'>⭐ 관심종목 - 전일 종가 기준 (T+1)</div>",
