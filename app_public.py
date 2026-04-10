@@ -535,8 +535,6 @@ def render_sidebar(indices_pub, indices_p1, surge_items, theme_items):
                 f"</div></div>",
                 unsafe_allow_html=True)
 
-        st.divider()
-
         # ── 특징주 / 특징테마 팝오버 ─────────────────────────────────────────
         if surge_items or theme_items:
             st.markdown("### 🏷️ 테마 &amp; 뉴스", unsafe_allow_html=True)
@@ -604,12 +602,10 @@ def render_sidebar(indices_pub, indices_p1, surge_items, theme_items):
                             st.caption("수집된 데이터 없음")
                     else:
                         st.caption("수집된 데이터 없음")
-            st.divider()
 
         # ── 키워드 워드클라우드 ───────────────────────────────────────────────
         top_kw = _get_top_keywords(surge_items, n=8)
         if top_kw:
-            st.markdown("### 🏷️ 핫 키워드", unsafe_allow_html=True)
             _max = max(c for _, c in top_kw) if top_kw else 1
             _words_html = " &nbsp; ".join(
                 f"<span style='font-size:{0.85 + 1.1*(c/_max):.2f}em;"
@@ -636,7 +632,6 @@ def render_sidebar(indices_pub, indices_p1, surge_items, theme_items):
                         f"</div></div>", unsafe_allow_html=True)
                 if not _top5:
                     st.caption("데이터 없음")
-            st.divider()
 
         # ── 휴장일 ───────────────────────────────────────────────────────────
         st.markdown("### 🗓️ 휴장일", unsafe_allow_html=True)
@@ -651,7 +646,6 @@ def render_sidebar(indices_pub, indices_p1, surge_items, theme_items):
                 st.warning("🇺🇸 **NYSE/NASDAQ 미국휴장일**")
                 for h in _US_HOLIDAYS:
                     st.markdown(f"- **{h['date']}**: {h['reason']}")
-        st.divider()
 
         # ── 시스템 상태 ───────────────────────────────────────────────────────
         # P1 데이터 신선도
