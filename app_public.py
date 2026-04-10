@@ -393,31 +393,30 @@ def render_chart(ticker, name):
     # Candlestick
     fig.add_trace(go.Candlestick(
         x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
-        name="가격", increasing_line_color="#f85149", decreasing_line_color="#58a6ff",
-        increasing_fillcolor="#f85149", decreasing_fillcolor="#58a6ff"), row=1, col=1)
+        name="가격", increasing_line_color="#c62828", decreasing_line_color="#1565c0",
+        increasing_fillcolor="#c62828", decreasing_fillcolor="#1565c0"), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df["MA5"],  name="MA5",
-                             line=dict(color="#3fb950", width=1.2, dash="dot")), row=1, col=1)
+                             line=dict(color="#2e7d32", width=1.2, dash="dot")), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df["MA20"], name="MA20",
-                             line=dict(color="#e3b341", width=1.5)), row=1, col=1)
+                             line=dict(color="#f57c00", width=1.5)), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df["MA60"], name="MA60",
-                             line=dict(color="#a371f7", width=1.5)), row=1, col=1)
+                             line=dict(color="#7b1fa2", width=1.5)), row=1, col=1)
     # Volume
     close_v = df["Close"].values.flatten()
     open_v  = df["Open"].values.flatten()
-    colors  = ["#f85149" if c >= o else "#58a6ff" for c, o in zip(close_v, open_v)]
+    colors  = ["#c62828" if c >= o else "#1565c0" for c, o in zip(close_v, open_v)]
     vol_ma  = pd.Series(df["Volume"].values.flatten()).rolling(20).mean()
     fig.add_trace(go.Bar(x=df.index, y=df["Volume"].values.flatten(),
                          name="거래량", marker_color=colors, opacity=0.5), row=2, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=vol_ma,
-                             name="거래량MA20", line=dict(color="#e3b341", width=1)),
+                             name="거래량MA20", line=dict(color="#f57c00", width=1)),
                   row=2, col=1)
     fig.update_layout(
-        template="plotly_dark", height=460, margin=dict(l=0, r=0, t=30, b=0),
+        template="plotly_white", height=550, margin=dict(l=10, r=10, t=30, b=10),
         title=dict(text=f"{name} ({ticker}) - 6개월 (15분 지연)", font=dict(size=13), x=0),
-        xaxis_rangeslider_visible=False, legend=dict(orientation="h", y=1.08, x=0),
-        paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
-    fig.update_yaxes(gridcolor="#21262d")
-    fig.update_xaxes(gridcolor="#21262d")
+        xaxis_rangeslider_visible=False, legend=dict(orientation="h", y=1.08, x=0))
+    fig.update_yaxes(gridcolor="#eeeeee")
+    fig.update_xaxes(gridcolor="#eeeeee")
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -891,7 +890,17 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
     # 등락률·7일누적
     daily_chg = float(_row.get("당일등락", 0) or 0)
     week_chg  = float(_row.get("7일누적",  0) or 0)
-    mktcap    = corp.get("시가총액", "") or ""
+
+    # 시가총액 포맷 (원 단위 정수 → 억/조 표시)
+    def _fmt_cap(v):
+        try:
+            n = float(v)
+            if n >= 1e12: return f"{n/1e12:.1f}조원"
+            if n >= 1e8:  return f"{n/1e8:.0f}억원"
+            return f"{n:,.0f}원"
+        except: return "N/A"
+    mktcap_raw = corp.get("시가총액") or _row.get("시가총액") or 0
+    mktcap_str = _fmt_cap(mktcap_raw) if mktcap_raw else "N/A"
 
     chg_color  = "#c62828" if daily_chg >= 0 else "#1565c0"
     chg_sign   = "▲"       if daily_chg >= 0 else "▼"
@@ -903,7 +912,7 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
         f"<div style='background:#f8f9fa;border-radius:12px;padding:16px 20px;margin-bottom:10px;'>"
         f"<div style='display:flex;align-items:flex-end;gap:28px;flex-wrap:wrap;'>"
         f"<div><div style='font-size:0.75em;color:#999;'>시가총액</div>"
-        f"<div style='font-size:1.6em;font-weight:700;'>{mktcap if mktcap else 'N/A'}</div></div>"
+        f"<div style='font-size:1.6em;font-weight:700;'>{mktcap_str}</div></div>"
         f"<div><div style='font-size:0.75em;color:#999;'>현재가</div>"
         f"<div style='font-size:1.6em;font-weight:700;'>{int(cur_price):,}원 "
         f"<span style='font-size:0.55em;color:{chg_color};'>{chg_sign}{abs(daily_chg):.2f}%</span></div></div>"
@@ -928,41 +937,96 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
         outline = corp.get("outline", {})
         fin     = corp.get("financial", {})
 
-        # 기업정보 · 재무요약 expander
-        if outline or fin:
-            with st.expander("📊 기업정보 · 재무요약", expanded=True):
-                if outline:
-                    for field, label in [("sicNm", "업종"), ("enpEstbDt", "설립일"),
-                                         ("enpEmpeCnt", "직원수"), ("enpStacMm", "결산월")]:
-                        val = outline.get(field, "-") or "-"
-                        st.markdown(
-                            f"<div style='display:flex;justify-content:space-between;"
-                            f"padding:4px 0;border-bottom:1px solid #f0f0f0;font-size:0.88em;'>"
-                            f"<span style='color:#888;'>{label}</span>"
-                            f"<span style='font-weight:600;'>{val}</span></div>",
-                            unsafe_allow_html=True)
+        def _metric_row(label, val, badge_html=""):
+            return (
+                f"<div style='display:flex;justify-content:space-between;align-items:center;"
+                f"padding:5px 0;border-bottom:1px solid #f0f0f0;font-size:0.88em;'>"
+                f"<span style='color:#666;'>{label}</span>"
+                f"<span style='font-weight:600;'>{val}&nbsp;{badge_html}</span></div>"
+            )
+
+        def _badge(text, kind):
+            c = {"good":"#2e7d32","warn":"#e65100","bad":"#c62828","neutral":"#666"}.get(kind,"#666")
+            bg = {"good":"#e8f5e9","warn":"#fff3e0","bad":"#ffebee","neutral":"#f5f5f5"}.get(kind,"#f5f5f5")
+            return (f"<span style='background:{bg};color:{c};border-radius:4px;"
+                    f"padding:1px 6px;font-size:0.8em;font-weight:700;'>{text}</span>")
+
+        # ── 팝업 버튼 2개 (P1 스타일) ────────────────────────────────────────
+        _pc1, _pc2 = st.columns(2)
+
+        with _pc1:
+            with st.popover("10초 재무확인", use_container_width=True):
+                st.markdown("**🛡️ 재무 안정성 지표**")
                 if fin:
                     biz_year = fin.get("bizYear", "")
-                    st.caption(f"재무 기준: {biz_year}년")
-                    for field, label in [("enpSaleAmt", "매출액"), ("enpBzopPft", "영업이익"),
-                                         ("enpCrtmNpf", "순이익"), ("fnclDebtRto", "부채비율")]:
-                        raw_val = fin.get(field, "-")
-                        try:
-                            v = float(raw_val)
-                            fmt = f"{v:.1f}%" if label == "부채비율" else f"{v:,.0f}"
-                        except (TypeError, ValueError):
-                            fmt = str(raw_val) if raw_val else "-"
-                        color_style = ""
-                        if label == "영업이익":
-                            try:
-                                color_style = "color:#c62828;" if float(raw_val) >= 0 else "color:#1565c0;"
-                            except: pass
+                    st.caption(f"기준: {biz_year}년")
+                    # 부채비율
+                    debt_rto = fin.get("fnclDebtRto", "")
+                    try:
+                        dr = float(debt_rto)
+                        dr_badge = _badge("양호","good") if 0<dr<=100 else (_badge("주의","warn") if dr<=200 else _badge("위험","bad"))
+                        dr_str = f"{dr:.1f}%"
+                    except: dr_badge = _badge("N/A","neutral"); dr_str = "-"
+                    # 자본잠식 (총자본 기준)
+                    tcpt = fin.get("enpTcptAmt", "")
+                    try:
+                        tc = float(tcpt)
+                        if tc <= 0:
+                            cap_str = "완전잠식"; cap_badge = _badge("완전잠식","bad")
+                        else:
+                            cap_str = "정상"; cap_badge = _badge("정상","good")
+                    except: cap_str = "N/A"; cap_badge = _badge("N/A","neutral")
+                    # 총자산/총부채
+                    tast = fin.get("enpTastAmt",""); tdbt = fin.get("enpTdbtAmt","")
+                    try:    tast_str = f"{float(tast):,.0f}"
+                    except: tast_str = "-"
+                    try:    tdbt_str = f"{float(tdbt):,.0f}"
+                    except: tdbt_str = "-"
+                    st.markdown(
+                        _metric_row("부채비율", dr_str, dr_badge) +
+                        _metric_row("자본잠식", cap_str, cap_badge) +
+                        _metric_row("총자산(백만)", tast_str) +
+                        _metric_row("총부채(백만)", tdbt_str),
+                        unsafe_allow_html=True)
+                else:
+                    st.caption("재무 데이터 없음")
+
+        with _pc2:
+            with st.popover("핵심 투자지표", use_container_width=True):
+                st.markdown("**📌 성장 및 수익성 지표**")
+                if fin:
+                    sale = fin.get("enpSaleAmt",""); opr = fin.get("enpBzopPft","")
+                    net  = fin.get("enpCrtmNpf","")
+                    try:
+                        s_v = float(sale); o_v = float(opr); n_v = float(net)
+                        opm = o_v / s_v * 100 if s_v != 0 else 0
+                        npm = n_v / s_v * 100 if s_v != 0 else 0
+                        opm_badge = _badge("양호","good") if opm>=10 else (_badge("보통","neutral") if opm>=0 else _badge("위험","bad"))
+                        npm_badge = _badge("양호","good") if npm>=5  else (_badge("보통","neutral") if npm>=0 else _badge("위험","bad"))
+                        opr_badge = _badge("흑자","good") if o_v>=0 else _badge("적자","bad")
                         st.markdown(
-                            f"<div style='display:flex;justify-content:space-between;"
-                            f"padding:4px 0;border-bottom:1px solid #f0f0f0;font-size:0.88em;'>"
-                            f"<span style='color:#888;'>{label}</span>"
-                            f"<span style='font-weight:600;{color_style}'>{fmt}</span></div>",
+                            _metric_row("매출액(백만)", f"{s_v:,.0f}") +
+                            _metric_row("영업이익(백만)", f"{o_v:,.0f}", opr_badge) +
+                            _metric_row("영업이익률", f"{opm:.1f}%", opm_badge) +
+                            _metric_row("순이익(백만)", f"{n_v:,.0f}") +
+                            _metric_row("순이익률", f"{npm:.1f}%", npm_badge),
                             unsafe_allow_html=True)
+                    except: st.caption("수치 계산 불가")
+                else:
+                    st.caption("재무 데이터 없음")
+
+        # 기업 기본정보 (업종 등)
+        if outline:
+            st.markdown("")
+            for field, label in [("sicNm","업종"),("enpEstbDt","설립일"),
+                                  ("enpEmpeCnt","직원수"),("enpStacMm","결산월")]:
+                val = outline.get(field,"-") or "-"
+                st.markdown(
+                    f"<div style='display:flex;justify-content:space-between;"
+                    f"padding:4px 0;border-bottom:1px solid #f0f0f0;font-size:0.85em;'>"
+                    f"<span style='color:#888;'>{label}</span>"
+                    f"<span style='font-weight:600;'>{val}</span></div>",
+                    unsafe_allow_html=True)
 
         # 6개월 고저 위치
         if not ohlcv.empty:
@@ -982,18 +1046,6 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
                     f"</div></div>",
                     unsafe_allow_html=True)
             except: pass
-
-        st.markdown("---")
-
-        # RSI 게이지
-        st.markdown("**📊 RSI 신호**")
-        rsi_cols = st.columns(3)
-        for col, label, key in [(rsi_cols[0], "일봉", "_daily"),
-                                 (rsi_cols[1], "주봉", "_1wk"),
-                                 (rsi_cols[2], "5분봉", "_5m")]:
-            data = rsi_snapshot.get(f"{ticker}{key}", {})
-            with col:
-                _rsi_gauge(label, data.get("rsi"), data.get("signal", ""))
 
         st.markdown("---")
 
