@@ -331,6 +331,23 @@ def render_sidebar(indices):
                     f"<span class='{cls}'>{sign} {abs(fltRt):.2f}%</span></div></div>",
                     unsafe_allow_html=True)
             except: pass
+
+        # Market breadth
+        raw = _get_all_stocks_raw()
+        if not raw.empty:
+            up   = int((raw["fltRt"] > 0).sum())
+            dn   = int((raw["fltRt"] < 0).sum())
+            flat = int((raw["fltRt"] == 0).sum())
+            st.markdown(
+                f"<div class='metric-card'>"
+                f"<div class='metric-label'>시장 폭 (전체 종목)</div>"
+                f"<div class='metric-value' style='font-size:0.95em'>"
+                f"<span class='up'>▲ {up}</span> &nbsp;"
+                f"<span class='down'>▼ {dn}</span> &nbsp;"
+                f"<span style='color:#8b949e'>― {flat}</span>"
+                f"</div></div>",
+                unsafe_allow_html=True)
+
         st.divider()
         st.markdown("### 🔍 필터")
         market_filter = st.radio("시장 구분", ["전체", "KOSPI", "KOSDAQ"],
@@ -442,19 +459,44 @@ def _rsi_gauge(label, rsi_val, signal):
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 
-def render_detail(ticker, name, rsi_snapshot, cb_overhang):
+def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
     st.divider()
     st.markdown(f"<div class='section-title'>📋 {name} ({ticker})</div>", unsafe_allow_html=True)
 
-    # Row 1: extra daily stats
+    # Surge reason banner
+    if surge_reasons:
+        reason_data = surge_reasons.get(str(ticker).zfill(6), {})
+        reason_txt  = reason_data.get("reason", "") if isinstance(reason_data, dict) else ""
+        if reason_txt:
+            st.info(f"📌 급등이유: {reason_txt}")
+
+    # Row 1: extra daily stats + 6개월 고저
     extra = get_stock_extra(ticker)
+    # 6개월 고저 + 현재가 위치 (캐시된 OHLCV 재사용)
+    ohlcv = get_ohlcv(ticker)
+    if not ohlcv.empty:
+        hi_6m = float(ohlcv["High"].max())
+        lo_6m = float(ohlcv["Low"].min())
+        cur   = float(ohlcv["Close"].iloc[-1])
+        pos   = (cur - lo_6m) / (hi_6m - lo_6m) * 100 if hi_6m != lo_6m else 0
+        extra["6개월 고가"] = int(hi_6m)
+        extra["6개월 저가"] = int(lo_6m)
+        extra["고저위치"]  = f"{pos:.0f}%"
+
     if extra:
         ec = st.columns(len(extra))
         for i, (lbl, val) in enumerate(extra.items()):
             with ec[i]:
+                fmt = f"{val:,}" if isinstance(val, int) else str(val)
+                color = ""
+                if lbl == "고저위치":
+                    pct = float(str(val).replace("%", ""))
+                    color = ("color:#f85149" if pct >= 70
+                             else "color:#58a6ff" if pct <= 30
+                             else "color:#3fb950")
                 st.markdown(
                     f"<div class='metric-card'><div class='metric-label'>{lbl}</div>"
-                    f"<div class='metric-value' style='font-size:0.95em'>{val:,}</div></div>",
+                    f"<div class='metric-value' style='font-size:0.95em;{color}'>{fmt}</div></div>",
                     unsafe_allow_html=True)
 
     # Row 2: company outline + financial summary
@@ -595,7 +637,7 @@ def main():
             if st.session_state.sel_ticker_surge:
                 render_detail(st.session_state.sel_ticker_surge,
                               st.session_state.sel_name_surge,
-                              rsi_snapshot, cb_overhang)
+                              rsi_snapshot, cb_overhang, surge_reasons)
 
     with tab2:
         st.markdown("<div class='section-title'>⭐ 관심종목 - 전일 종가 기준 (T+1)</div>",
