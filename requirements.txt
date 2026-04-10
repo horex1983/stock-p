@@ -1,6 +1,6 @@
-streamlit
-pandas
-requests
-yfinance
-python-dotenv
-plotly
+streamlit>=1.30.0
+pandas>=2.0.0
+requests>=2.31.0
+yfinance>=0.2.36
+python-dotenv>=1.0.0
+plotly>=5.18.0
