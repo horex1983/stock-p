@@ -50,7 +50,7 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 
-@st.cache_data(ttl=1800)
+@st.cache_data(ttl=300)
 def _github_json(path):
     if not GITHUB_TOKEN or not GITHUB_REPO: return None
     try:
