@@ -11,7 +11,7 @@ from plotly.subplots import make_subplots
 import yfinance as yf
 from datetime import datetime, timedelta, date
 from dotenv import load_dotenv
-from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, JsCode
+from st_aggrid import AgGrid, GridOptionsBuilder, JsCode
 
 load_dotenv()
 
@@ -283,7 +283,6 @@ def _build_aggrid(disp_df, height=520, has_rank=True):
         disp_df,
         gridOptions=gb.build(),
         theme="alpine",
-        update_mode=GridUpdateMode.SELECTION_CHANGED,
         allow_unsafe_jscode=True,
         use_container_width=True,
         height=height,
