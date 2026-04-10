@@ -29,10 +29,6 @@ st.markdown("""
 .down { color: #58a6ff !important; }
 .section-title { color: #f0f6fc; font-size: 1.05em; font-weight: 700;
     border-left: 3px solid #238636; padding-left: 8px; margin: 16px 0 8px 0; }
-/* 데이터프레임 다크 테마 */
-[data-testid="stDataFrame"] > div { background: #161b22 !important; }
-[data-testid="stDataFrame"] iframe { background: #161b22 !important; }
-.dvn-scroller { background: #161b22 !important; }
 </style>""", unsafe_allow_html=True)
 
 
