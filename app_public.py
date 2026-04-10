@@ -282,6 +282,62 @@ def render_watchlist_table(wdf):
     return selected, wdf
 
 
+def _rsi_gauge(label, rsi_val, signal):
+    """Render a compact Plotly RSI gauge chart."""
+    try:
+        v = float(rsi_val)
+    except (TypeError, ValueError):
+        v = None
+
+    if v is None:
+        bar_color = "#30363d"
+        needle_v  = 50
+    elif v >= 70:
+        bar_color = "#f85149"   # overbought — red
+        needle_v  = v
+    elif v <= 30:
+        bar_color = "#58a6ff"   # oversold — blue
+        needle_v  = v
+    else:
+        bar_color = "#3fb950"   # neutral — green
+        needle_v  = v
+
+    display = f"{v:.1f}" if v is not None else "-"
+
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=needle_v if v is not None else 50,
+        number={"suffix": "", "font": {"size": 22, "color": bar_color}},
+        title={"text": f"<b>{label}</b><br><span style='font-size:0.75em;color:#8b949e'>{signal}</span>",
+               "font": {"size": 12, "color": "#8b949e"}},
+        gauge={
+            "axis": {"range": [0, 100], "tickwidth": 1, "tickcolor": "#30363d",
+                     "tickvals": [0, 30, 50, 70, 100],
+                     "ticktext": ["0", "30", "50", "70", "100"],
+                     "tickfont": {"size": 9, "color": "#8b949e"}},
+            "bar":  {"color": bar_color, "thickness": 0.25},
+            "bgcolor": "#161b22",
+            "borderwidth": 0,
+            "steps": [
+                {"range": [0,  30], "color": "#0d2137"},
+                {"range": [30, 70], "color": "#1a1f2e"},
+                {"range": [70, 100], "color": "#2d0d0d"},
+            ],
+            "threshold": {
+                "line": {"color": "#f0f6fc", "width": 2},
+                "thickness": 0.75,
+                "value": needle_v if v is not None else 50,
+            },
+        },
+    ))
+    fig.update_layout(
+        height=160, margin=dict(l=10, r=10, t=40, b=5),
+        paper_bgcolor="#161b22", plot_bgcolor="#161b22",
+        font={"color": "#f0f6fc"},
+    )
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+
 def render_detail(ticker, name, rsi_snapshot, cb_overhang):
     st.divider()
     st.markdown(f"<div class='section-title'>📋 {name} ({ticker})</div>", unsafe_allow_html=True)
@@ -289,13 +345,7 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang):
     for col, label, key in [(c1, "RSI 일봉", "_daily"), (c2, "RSI 주봉", "_1wk"), (c3, "RSI 5분봉", "_5m")]:
         data = rsi_snapshot.get(f"{ticker}{key}", {})
         with col:
-            v   = data.get("rsi", "-")
-            sig = data.get("signal", "")
-            st.markdown(
-                f"<div class='metric-card'><div class='metric-label'>{label}</div>"
-                f"<div class='metric-value'>{v}</div>"
-                f"<div style='font-size:0.8em;color:#8b949e'>{sig}</div></div>",
-                unsafe_allow_html=True)
+            _rsi_gauge(label, data.get("rsi"), data.get("signal", ""))
     with c4:
         has   = bool(cb_overhang.get(ticker))
         lbl   = "⚠️ 오버행 있음" if has else "✅ 오버행 없음"
