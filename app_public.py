@@ -653,13 +653,6 @@ def render_sidebar(indices_pub, indices_p1, surge_items, theme_items):
                     st.markdown(f"- **{h['date']}**: {h['reason']}")
         st.divider()
 
-        # ── 필터 ─────────────────────────────────────────────────────────────
-        st.markdown(
-            "<div style='margin-bottom:6px;padding-bottom:5px;border-bottom:1px solid #E8ECF4;'>"
-            "<strong>🔍 필터</strong></div>", unsafe_allow_html=True)
-        market_filter = st.radio("시장 구분", ["전체", "KOSPI", "KOSDAQ"],
-                                  horizontal=True, label_visibility="collapsed")
-
         # ── 시스템 상태 ───────────────────────────────────────────────────────
         # P1 데이터 신선도
         meta = get_meta()
@@ -708,7 +701,7 @@ def render_sidebar(indices_pub, indices_p1, surge_items, theme_items):
         if st.button("🔄 데이터 새로고침", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
-    return market_filter
+    return "전체"
 
 
 def render_p1_table(surge_table, rsi_snapshot, watchlist=None, market_filter="전체"):
