@@ -654,25 +654,57 @@ def render_sidebar(indices_pub, indices_p1, surge_items, theme_items):
         st.divider()
 
         # ── 필터 ─────────────────────────────────────────────────────────────
-        st.markdown("### 🔍 필터")
+        st.markdown(
+            "<div style='margin-bottom:6px;padding-bottom:5px;border-bottom:1px solid #E8ECF4;'>"
+            "<strong>🔍 필터</strong></div>", unsafe_allow_html=True)
         market_filter = st.radio("시장 구분", ["전체", "KOSPI", "KOSDAQ"],
                                   horizontal=True, label_visibility="collapsed")
-        st.divider()
 
         # ── 시스템 상태 ───────────────────────────────────────────────────────
+        # P1 데이터 신선도
         meta = get_meta()
+        exported_at = ""
         if meta:
             exported_at = meta.get("last_exported_at", "")
             try:
-                delta = datetime.now() - datetime.strptime(exported_at, "%Y-%m-%d %H:%M:%S")
-                age_min = delta.total_seconds() / 60
-                p1_icon = "🟢" if age_min < 30 else "🟡" if age_min < 120 else "🔴"
-            except: p1_icon = "🟡"
-            st.markdown(
-                f"<div style='font-size:0.82em;color:#8b949e'>"
-                f"🛠 P1 {p1_icon} &nbsp; 수집: {exported_at[:16] if exported_at else '-'}"
-                f"</div>", unsafe_allow_html=True)
-        st.caption("📈 차트: yfinance (15분 지연)")
+                age_min = (datetime.now() -
+                           datetime.strptime(exported_at, "%Y-%m-%d %H:%M:%S")
+                           ).total_seconds() / 60
+                _p1_icon = "🟢" if age_min < 30 else "🟡" if age_min < 120 else "🔴"
+            except:
+                _p1_icon = "🟡"
+        else:
+            _p1_icon = "🔴"
+
+        # 장 상태 (KST 기준)
+        _now = datetime.utcnow() + timedelta(hours=9)
+        _hm  = _now.hour * 60 + _now.minute
+        _wd  = _now.weekday()
+        if _wd >= 5:
+            _mkt_icon, _mkt_label = "⚫", "휴장"
+        elif 540 <= _hm < 930:
+            _mkt_icon, _mkt_label = "🟢", "장중"
+        elif 480 <= _hm < 540:
+            _mkt_icon, _mkt_label = "🟡", "장전"
+        elif 930 <= _hm < 1080:
+            _mkt_icon, _mkt_label = "🟡", "시간외"
+        else:
+            _mkt_icon, _mkt_label = "⚫", "장외"
+
+        # 뉴스 데이터 (infostock surge_items 유무)
+        _news_icon = "🟢" if surge_items else "🔴"
+
+        st.markdown(
+            f"<div style='margin:14px 0 6px 0;padding-bottom:5px;border-bottom:1px solid #E8ECF4;'>"
+            f"<strong>🛠 시스템 상태</strong>"
+            f"&nbsp;&nbsp;{_p1_icon} {_mkt_icon} {_news_icon}"
+            f"</div>"
+            f"<div style='font-size:0.78em;color:#888;margin-bottom:8px;'>"
+            f"수집: {exported_at[:16] if exported_at else '-'} &nbsp;·&nbsp; "
+            f"장: {_mkt_label} &nbsp;·&nbsp; 차트: yfinance 15분 지연"
+            f"</div>",
+            unsafe_allow_html=True)
+
         if st.button("🔄 데이터 새로고침", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
