@@ -355,7 +355,10 @@ def get_ohlcv(ticker):
     for suffix in [".KS", ".KQ"]:
         try:
             df = yf.download(ticker + suffix, period="6mo", progress=False, auto_adjust=True)
-            if not df.empty: return df
+            if not df.empty:
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                return df
         except: pass
     return pd.DataFrame()
 
