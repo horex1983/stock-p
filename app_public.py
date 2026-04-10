@@ -139,6 +139,59 @@ def get_surge_ranking(top_n=50):
     return df
 
 
+@st.cache_data(ttl=86400)
+def get_crno(ticker):
+    """KRX API: ticker → crno (법인등록번호)."""
+    bas_dt = _latest_biz_date()
+    body = _pub("GetKrxListedInfoService/getItemInfo",
+                {"numOfRows": 5, "pageNo": 1, "basDt": bas_dt,
+                 "likeSrtnCd": str(ticker).zfill(6)})
+    if not body: return ""
+    raw = body.get("items", {}).get("item", [])
+    items = raw if isinstance(raw, list) else [raw]
+    for it in items:
+        if str(it.get("srtnCd", "")).zfill(6) == str(ticker).zfill(6):
+            return it.get("crno", "")
+    return items[0].get("crno", "") if items else ""
+
+
+def _pub_http(endpoint, params):
+    """공공 API 호출 (http — 재무/기업정보 전용)."""
+    if not PUBLIC_DATA_API_KEY: return None
+    try:
+        r = requests.get(f"http://apis.data.go.kr/1160100/service/{endpoint}",
+            params={"serviceKey": PUBLIC_DATA_API_KEY, "resultType": "json", **params},
+            timeout=10)
+        d = r.json()
+        if d.get("response", {}).get("header", {}).get("resultCode") != "00": return None
+        return d["response"]["body"]
+    except: return None
+
+
+@st.cache_data(ttl=86400)
+def get_corp_outline(crno):
+    """기업개요 조회 (업종/설립일/직원수 등)."""
+    if not crno: return {}
+    body = _pub_http("GetCorpBasicInfoService_V2/getCorpOutline_V2",
+                     {"crno": crno, "numOfRows": 1, "pageNo": 1})
+    if not body: return {}
+    raw = body.get("items", {}).get("item", [])
+    items = raw if isinstance(raw, list) else [raw]
+    return items[0] if items else {}
+
+
+@st.cache_data(ttl=86400)
+def get_financial_summary(crno):
+    """요약재무제표 조회 (매출/영업이익/순이익/부채비율)."""
+    if not crno: return []
+    biz_year = str(datetime.now().year - 1)
+    body = _pub_http("GetFinaStatInfoService_V2/getSummFinaStat_V2",
+                     {"crno": crno, "bizYear": biz_year, "numOfRows": 10, "pageNo": 1})
+    if not body: return []
+    raw = body.get("items", {}).get("item", [])
+    return raw if isinstance(raw, list) else [raw]
+
+
 def get_watchlist_prices(codes):
     df = _get_all_stocks_raw()
     if df.empty or not codes: return pd.DataFrame()
@@ -397,17 +450,61 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang):
     extra = get_stock_extra(ticker)
     if extra:
         ec = st.columns(len(extra))
-        labels = {"시가": "시가", "고가": "고가", "저가": "저가",
-                  "거래대금": "거래대금", "시가총액": "시가총액"}
         for i, (lbl, val) in enumerate(extra.items()):
             with ec[i]:
-                fmt = f"{val:,}"
                 st.markdown(
                     f"<div class='metric-card'><div class='metric-label'>{lbl}</div>"
-                    f"<div class='metric-value' style='font-size:0.95em'>{fmt}</div></div>",
+                    f"<div class='metric-value' style='font-size:0.95em'>{val:,}</div></div>",
                     unsafe_allow_html=True)
 
-    # Row 2: RSI gauges + overhang
+    # Row 2: company outline + financial summary
+    crno    = get_crno(ticker)
+    outline = get_corp_outline(crno)
+    fin     = get_financial_summary(crno)
+
+    if outline or fin:
+        with st.expander("📊 기업정보 · 재무요약", expanded=False):
+            if outline:
+                oc = st.columns(4)
+                outline_fields = [
+                    ("sicNm",       "업종"),
+                    ("enpEstbDt",   "설립일"),
+                    ("enpEmpeCnt",  "직원수"),
+                    ("enpStacMm",   "결산월"),
+                ]
+                for i, (field, label) in enumerate(outline_fields):
+                    val = outline.get(field, "-") or "-"
+                    with oc[i]:
+                        st.markdown(
+                            f"<div class='metric-card'><div class='metric-label'>{label}</div>"
+                            f"<div class='metric-value' style='font-size:0.9em'>{val}</div></div>",
+                            unsafe_allow_html=True)
+            if fin:
+                # Pick the KRW row (curCd == "KRW") or first row
+                row = next((r for r in fin if r.get("curCd") == "KRW"), fin[0])
+                biz_year = row.get("bizYear", "")
+                st.caption(f"재무 기준: {biz_year}년 (연결/개별 혼합)")
+                fc = st.columns(4)
+                fin_fields = [
+                    ("enpSaleAmt",   "매출액"),
+                    ("enpBzopPft",   "영업이익"),
+                    ("enpCrtmNpf",   "당기순이익"),
+                    ("fnclDebtRto",  "부채비율(%)"),
+                ]
+                for i, (field, label) in enumerate(fin_fields):
+                    raw_val = row.get(field, "-")
+                    try:
+                        v = float(raw_val)
+                        fmt = f"{v:,.0f}" if label != "부채비율(%)" else f"{v:.1f}%"
+                    except (TypeError, ValueError):
+                        fmt = str(raw_val) if raw_val else "-"
+                    with fc[i]:
+                        st.markdown(
+                            f"<div class='metric-card'><div class='metric-label'>{label}</div>"
+                            f"<div class='metric-value' style='font-size:0.9em'>{fmt}</div></div>",
+                            unsafe_allow_html=True)
+
+    # Row 3: RSI gauges + overhang
     c1, c2, c3, c4 = st.columns(4)
     for col, label, key in [(c1, "RSI 일봉", "_daily"), (c2, "RSI 주봉", "_1wk"), (c3, "RSI 5분봉", "_5m")]:
         data = rsi_snapshot.get(f"{ticker}{key}", {})
@@ -429,8 +526,14 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang):
     if items:
         rows = [{"날짜": it.get("rcept_dt", "")[:8],
                  "구분": _TYPE.get(it.get("pblntf_ty", ""), it.get("pblntf_ty", "")),
-                 "제목": it.get("report_nm", ""), "제출인": it.get("flr_nm", "")} for it in items]
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                 "제목": it.get("report_nm", ""),
+                 "제출인": it.get("flr_nm", ""),
+                 "링크": f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={it.get('rcept_no', '')}"
+                         if it.get("rcept_no") else ""} for it in items]
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True,
+                     column_config={
+                         "링크": st.column_config.LinkColumn("링크", width="small",
+                                                              display_text="열기")})
     else:
         st.caption("최근 공시 없음")
 
