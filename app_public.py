@@ -3,7 +3,8 @@ app_public.py — 급등주 모멘텀 대시보드 (공개 배포용)
 합법 소스: 금융위원회 공공API + DART + yfinance + GitHub 공유데이터
 """
 
-import os, json, base64, logging, requests
+import os, json, base64, logging, requests, re
+from collections import Counter
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -88,6 +89,27 @@ def get_watchlist():
     if isinstance(d, list): return d
     if isinstance(d, dict): return d.get("items", d.get("tickers", []))
     return []
+
+
+def _github_put(path, content_str):
+    """Write/update a file in the GitHub repo. Returns True on success."""
+    if not GITHUB_TOKEN or not GITHUB_REPO: return False
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{path}"
+    headers = {"Authorization": f"Bearer {GITHUB_TOKEN}",
+               "Accept": "application/vnd.github+json"}
+    try:
+        r = requests.get(url, headers=headers,
+                         params={"ref": GITHUB_BRANCH}, timeout=10)
+        sha = r.json().get("sha", "") if r.status_code == 200 else ""
+        payload = {"message": f"update {path}",
+                   "content": base64.b64encode(content_str.encode()).decode(),
+                   "branch": GITHUB_BRANCH}
+        if sha:
+            payload["sha"] = sha
+        r2 = requests.put(url, headers=headers, json=payload, timeout=10)
+        return r2.status_code in (200, 201)
+    except:
+        return False
 
 
 _PUB = "https://apis.data.go.kr/1160100/service"
@@ -247,8 +269,27 @@ def render_chart(ticker, name):
         return
     df["MA5"]  = df["Close"].rolling(5).mean()
     df["MA20"] = df["Close"].rolling(20).mean()
+    df["MA60"] = df["Close"].rolling(60).mean()
+    df["BB_std"]   = df["Close"].rolling(20).std()
+    df["BB_upper"] = df["MA20"] + 2 * df["BB_std"]
+    df["BB_lower"] = df["MA20"] - 2 * df["BB_std"]
+
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
                         row_heights=[0.75, 0.25], vertical_spacing=0.02)
+    # Bollinger band fill
+    fig.add_trace(go.Scatter(
+        x=pd.concat([df.index.to_series(), df.index.to_series()[::-1]]),
+        y=pd.concat([df["BB_upper"], df["BB_lower"][::-1]]),
+        fill="toself", fillcolor="rgba(99,110,250,0.08)",
+        line=dict(color="rgba(0,0,0,0)"), name="BB Band",
+        showlegend=False, hoverinfo="skip"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df["BB_upper"], name="BB상단",
+                             line=dict(color="rgba(99,110,250,0.5)", width=1, dash="dot"),
+                             showlegend=False), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df["BB_lower"], name="BB하단",
+                             line=dict(color="rgba(99,110,250,0.5)", width=1, dash="dot"),
+                             showlegend=False), row=1, col=1)
+    # Candlestick
     fig.add_trace(go.Candlestick(
         x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
         name="가격", increasing_line_color="#f85149", decreasing_line_color="#58a6ff",
@@ -257,13 +298,20 @@ def render_chart(ticker, name):
                              line=dict(color="#3fb950", width=1.2, dash="dot")), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df["MA20"], name="MA20",
                              line=dict(color="#e3b341", width=1.5)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df["MA60"], name="MA60",
+                             line=dict(color="#a371f7", width=1.5)), row=1, col=1)
+    # Volume
     close_v = df["Close"].values.flatten()
     open_v  = df["Open"].values.flatten()
     colors  = ["#f85149" if c >= o else "#58a6ff" for c, o in zip(close_v, open_v)]
+    vol_ma  = pd.Series(df["Volume"].values.flatten()).rolling(20).mean()
     fig.add_trace(go.Bar(x=df.index, y=df["Volume"].values.flatten(),
-                         name="거래량", marker_color=colors, opacity=0.6), row=2, col=1)
+                         name="거래량", marker_color=colors, opacity=0.5), row=2, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=vol_ma,
+                             name="거래량MA20", line=dict(color="#e3b341", width=1)),
+                  row=2, col=1)
     fig.update_layout(
-        template="plotly_dark", height=420, margin=dict(l=0, r=0, t=30, b=0),
+        template="plotly_dark", height=460, margin=dict(l=0, r=0, t=30, b=0),
         title=dict(text=f"{name} ({ticker}) - 6개월 (15분 지연)", font=dict(size=13), x=0),
         xaxis_rangeslider_visible=False, legend=dict(orientation="h", y=1.08, x=0),
         paper_bgcolor="#0e1117", plot_bgcolor="#0e1117")
@@ -580,10 +628,34 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
         st.caption("최근 공시 없음")
 
 
+_KW_STOP = {"및", "의", "을", "를", "에", "이", "가", "은", "는", "로", "으로",
+            "에서", "과", "와", "도", "등", "한", "하는", "하여", "대한", "위한",
+            "관련", "통해", "따른", "대해", "통한", "있는", "없는", "위해", "향한"}
+
+def _top_keywords(news_items, top_n=15):
+    words = []
+    for it in news_items:
+        tokens = re.findall(r'[가-힣]{2,}', it.get("title", ""))
+        words.extend(t for t in tokens if t not in _KW_STOP)
+    return Counter(words).most_common(top_n)
+
+
 def render_news(news_items):
     if not news_items:
         st.info("테마뉴스 없음. Project 1 데몬이 실행 중인지 확인하세요.")
         return
+
+    # Hot keyword tags
+    top_kws = _top_keywords(news_items)
+    if top_kws:
+        tags_html = " ".join(
+            f"<span style='background:#1f3a5f;color:#58a6ff;border-radius:12px;"
+            f"padding:3px 10px;font-size:0.82em;margin:2px;display:inline-block'>"
+            f"{w} <span style='color:#8b949e'>{c}</span></span>"
+            for w, c in top_kws)
+        st.markdown(f"**🔥 핫 키워드**<br>{tags_html}", unsafe_allow_html=True)
+        st.markdown("")
+
     kw = st.text_input("🔍 키워드 필터", placeholder="예: 반도체, AI, 바이오",
                         label_visibility="collapsed")
     filtered = news_items
@@ -642,8 +714,39 @@ def main():
     with tab2:
         st.markdown("<div class='section-title'>⭐ 관심종목 - 전일 종가 기준 (T+1)</div>",
                     unsafe_allow_html=True)
+
+        # Watchlist management UI
+        with st.expander("➕ 관심종목 관리", expanded=False):
+            col_inp, col_btn = st.columns([3, 1])
+            with col_inp:
+                new_cd = st.text_input("종목코드 (6자리)", max_chars=6,
+                                       placeholder="005930", label_visibility="collapsed")
+            with col_btn:
+                if st.button("추가", use_container_width=True):
+                    cd = str(new_cd).strip().zfill(6)
+                    if cd and cd not in watchlist:
+                        watchlist.append(cd)
+                        if _github_put("data/watchlist.json",
+                                       json.dumps(watchlist, ensure_ascii=False)):
+                            st.cache_data.clear()
+                            st.rerun()
+                        else:
+                            st.error("GitHub 업로드 실패")
+            if watchlist:
+                st.caption("현재 관심종목 (X 클릭하면 제거)")
+                rm_cols = st.columns(min(len(watchlist), 5))
+                for i, cd in enumerate(watchlist):
+                    with rm_cols[i % 5]:
+                        if st.button(f"{cd} ✕", key=f"rm_{cd}",
+                                     use_container_width=True):
+                            watchlist.remove(cd)
+                            _github_put("data/watchlist.json",
+                                        json.dumps(watchlist, ensure_ascii=False))
+                            st.cache_data.clear()
+                            st.rerun()
+
         if not watchlist:
-            st.info("관심종목 없음. Project 1에서 관심종목을 등록하세요.")
+            st.info("관심종목 없음. 위 관리 패널에서 종목코드를 추가하세요.")
         else:
             wdf = get_watchlist_prices(watchlist)
             if wdf.empty:
