@@ -12,7 +12,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta, date
 from dotenv import load_dotenv
-from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, ColumnsAutoSizeMode, JsCode
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, JsCode
 
 load_dotenv()
 
@@ -942,11 +942,13 @@ def render_p1_table(surge_table, rsi_snapshot, watchlist=None, market_filter="ì 
         df_table,
         gridOptions=gb.build(),
         update_mode=GridUpdateMode.SELECTION_CHANGED,
-        columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
-        use_container_width=True,
         allow_unsafe_jscode=True,
         custom_css=_AGGRID_CSS,
         height=470,
+        theme="streamlit",
+        show_toolbar=False,
+        show_search=False,
+        show_download_button=False,
         key="p2_surge_table",
     )
     return ag, df
