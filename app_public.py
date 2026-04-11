@@ -866,32 +866,7 @@ def _rsi_gauge(label, rsi_val, signal):
 def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
     st.divider()
 
-    # ── 헤더: P1 스타일 ──────────────────────────────────────────────────────
-    _hdr_col, _nv_col = st.columns([5, 1])
-    _hdr_col.markdown(f"### 🛡️ {name} ({ticker}) 분석 리포트")
-    _nv_col.link_button(
-        "🌐 네이버 분석",
-        f"https://finance.naver.com/item/main.naver?code={ticker}",
-        use_container_width=True,
-    )
-
-    # ── 데이터 수집 ──────────────────────────────────────────────────────────
-    corp    = get_corp_info(ticker)
-    ohlcv   = get_ohlcv(ticker)
-    _st     = get_surge_table()
-    _row    = next((r for r in _st if str(r.get("종목코드", "")).zfill(6) == str(ticker).zfill(6)), {})
-
-    # 현재가
-    cur_price = float(_row.get("현재가", 0) or corp.get("현재가", 0) or 0)
-    if cur_price == 0 and not ohlcv.empty:
-        try: cur_price = float(ohlcv["Close"].iloc[-1])
-        except: pass
-
-    # 등락률·7일누적
-    daily_chg = float(_row.get("당일등락", 0) or 0)
-    week_chg  = float(_row.get("7일누적",  0) or 0)
-
-    # 시가총액 포맷 (원 단위 정수 → 억/조 표시)
+    # ── 공통 헬퍼 ────────────────────────────────────────────────────────────
     def _fmt_cap(v):
         try:
             n = float(v)
@@ -899,94 +874,101 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
             if n >= 1e8:  return f"{n/1e8:.0f}억원"
             return f"{n:,.0f}원"
         except: return "N/A"
-    mktcap_raw = corp.get("시가총액") or _row.get("시가총액") or 0
-    mktcap_str = _fmt_cap(mktcap_raw) if mktcap_raw else "N/A"
+
+    def _mrow(label, val, bdg=""):
+        return (f"<div style='display:flex;justify-content:space-between;align-items:center;"
+                f"padding:5px 0;border-bottom:1px solid #f0f0f0;font-size:0.88em;'>"
+                f"<span style='color:#666;'>{label}</span>"
+                f"<span style='font-weight:600;'>{val}&nbsp;{bdg}</span></div>")
+
+    def _badge(text, kind):
+        c  = {"good":"#2e7d32","warn":"#e65100","bad":"#c62828","neutral":"#666"}.get(kind,"#666")
+        bg = {"good":"#e8f5e9","warn":"#fff3e0","bad":"#ffebee","neutral":"#f5f5f5"}.get(kind,"#f5f5f5")
+        return (f"<span style='background:{bg};color:{c};border-radius:4px;"
+                f"padding:1px 6px;font-size:0.8em;font-weight:700;'>{text}</span>")
+
+    # ── 데이터 수집 ──────────────────────────────────────────────────────────
+    corp  = get_corp_info(ticker)
+    ohlcv = get_ohlcv(ticker)
+    _st   = get_surge_table()
+    _row  = next((r for r in _st
+                  if str(r.get("종목코드","")).zfill(6) == str(ticker).zfill(6)), {})
+
+    cur_price  = float(_row.get("현재가",0) or corp.get("현재가",0) or 0)
+    if cur_price == 0 and not ohlcv.empty:
+        try: cur_price = float(ohlcv["Close"].iloc[-1])
+        except: pass
+
+    daily_chg  = float(_row.get("당일등락", 0) or 0)
+    week_chg   = float(_row.get("7일누적",  0) or 0)
+    mktcap_str = _fmt_cap(corp.get("시가총액") or _row.get("시가총액") or 0)
 
     chg_color  = "#c62828" if daily_chg >= 0 else "#1565c0"
     chg_sign   = "▲"       if daily_chg >= 0 else "▼"
     week_color = "#c62828" if week_chg  >= 0 else "#1565c0"
     week_sign  = "▲"       if week_chg  >= 0 else "▼"
 
-    # ── 핵심 요약 카드 (P1 동일 스타일) ─────────────────────────────────────
-    st.markdown(
-        f"<div style='background:#f8f9fa;border-radius:12px;padding:16px 20px;margin-bottom:10px;'>"
-        f"<div style='display:flex;align-items:flex-end;gap:28px;flex-wrap:wrap;'>"
-        f"<div><div style='font-size:0.75em;color:#999;'>시가총액</div>"
-        f"<div style='font-size:1.6em;font-weight:700;'>{mktcap_str}</div></div>"
-        f"<div><div style='font-size:0.75em;color:#999;'>현재가</div>"
-        f"<div style='font-size:1.6em;font-weight:700;'>{int(cur_price):,}원 "
-        f"<span style='font-size:0.55em;color:{chg_color};'>{chg_sign}{abs(daily_chg):.2f}%</span></div></div>"
-        f"<div><div style='font-size:0.75em;color:#999;'>7일 누적</div>"
-        f"<div style='font-size:1.3em;font-weight:600;color:{week_color};'>{week_sign}{abs(week_chg):.1f}%</div></div>"
-        f"</div></div>",
-        unsafe_allow_html=True,
-    )
+    outline = corp.get("outline", {})
+    fin     = corp.get("financial", {})
 
-    # ── 급등 사유 배너 ───────────────────────────────────────────────────────
-    if surge_reasons:
-        reason_data = surge_reasons.get(str(ticker).zfill(6), {})
-        reason_txt  = reason_data.get("reason", "") if isinstance(reason_data, dict) else ""
-        if reason_txt:
-            st.info(f"📌 급등이유: {reason_txt}")
+    # ── 헤더 (full width) ────────────────────────────────────────────────────
+    _hdr_col, _nv_col = st.columns([5, 1])
+    _hdr_col.markdown(f"### 🛡️ {name} ({ticker}) 분석 리포트")
+    _nv_col.link_button("🌐 네이버 종합분석 확인",
+                        f"https://finance.naver.com/item/main.naver?code={ticker}",
+                        use_container_width=True)
 
-    # ── 1:2 좌우 컬럼 (P1 구조) ─────────────────────────────────────────────
+    # ── 1:2 컬럼 ─────────────────────────────────────────────────────────────
     col_left, col_right = st.columns([1, 2])
 
-    # ── 왼쪽 패널 ────────────────────────────────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════════
+    # 왼쪽 패널
+    # ════════════════════════════════════════════════════════════════════════
     with col_left:
-        outline = corp.get("outline", {})
-        fin     = corp.get("financial", {})
 
-        def _metric_row(label, val, badge_html=""):
-            return (
-                f"<div style='display:flex;justify-content:space-between;align-items:center;"
-                f"padding:5px 0;border-bottom:1px solid #f0f0f0;font-size:0.88em;'>"
-                f"<span style='color:#666;'>{label}</span>"
-                f"<span style='font-weight:600;'>{val}&nbsp;{badge_html}</span></div>"
-            )
+        # ① 핵심 요약 카드
+        st.markdown(
+            f"<div style='background:#f8f9fa;border-radius:12px;"
+            f"padding:16px 20px;margin-bottom:8px;'>"
+            f"<div style='display:flex;align-items:flex-end;gap:20px;flex-wrap:wrap;'>"
+            f"<div><div style='font-size:0.75em;color:#999;'>시가총액</div>"
+            f"<div style='font-size:1.5em;font-weight:700;'>{mktcap_str}</div></div>"
+            f"<div><div style='font-size:0.75em;color:#999;'>현재가</div>"
+            f"<div style='font-size:1.5em;font-weight:700;'>{int(cur_price):,}원 "
+            f"<span style='font-size:0.55em;color:{chg_color};'>"
+            f"{chg_sign}{abs(daily_chg):.2f}%</span></div></div>"
+            f"<div><div style='font-size:0.75em;color:#999;'>7일 누적</div>"
+            f"<div style='font-size:1.2em;font-weight:600;color:{week_color};'>"
+            f"{week_sign}{abs(week_chg):.1f}%</div></div>"
+            f"</div></div>",
+            unsafe_allow_html=True)
 
-        def _badge(text, kind):
-            c = {"good":"#2e7d32","warn":"#e65100","bad":"#c62828","neutral":"#666"}.get(kind,"#666")
-            bg = {"good":"#e8f5e9","warn":"#fff3e0","bad":"#ffebee","neutral":"#f5f5f5"}.get(kind,"#f5f5f5")
-            return (f"<span style='background:{bg};color:{c};border-radius:4px;"
-                    f"padding:1px 6px;font-size:0.8em;font-weight:700;'>{text}</span>")
-
-        # ── 팝업 버튼 2개 (P1 스타일) ────────────────────────────────────────
+        # ② 팝업 버튼 2개
         _pc1, _pc2 = st.columns(2)
-
         with _pc1:
-            with st.popover("10초 재무확인", use_container_width=True):
+            with st.popover("10초 재무 확인", use_container_width=True):
                 st.markdown("**🛡️ 재무 안정성 지표**")
                 if fin:
-                    biz_year = fin.get("bizYear", "")
-                    st.caption(f"기준: {biz_year}년")
-                    # 부채비율
-                    debt_rto = fin.get("fnclDebtRto", "")
+                    st.caption(f"기준: {fin.get('bizYear','')}년")
+                    debt_rto = fin.get("fnclDebtRto","")
                     try:
                         dr = float(debt_rto)
-                        dr_badge = _badge("양호","good") if 0<dr<=100 else (_badge("주의","warn") if dr<=200 else _badge("위험","bad"))
-                        dr_str = f"{dr:.1f}%"
-                    except: dr_badge = _badge("N/A","neutral"); dr_str = "-"
-                    # 자본잠식 (총자본 기준)
-                    tcpt = fin.get("enpTcptAmt", "")
+                        dr_b = _badge("양호","good") if 0<dr<=100 else (_badge("주의","warn") if dr<=200 else _badge("위험","bad"))
+                    except: dr = None; dr_b = _badge("N/A","neutral")
+                    tcpt = fin.get("enpTcptAmt","")
                     try:
                         tc = float(tcpt)
-                        if tc <= 0:
-                            cap_str = "완전잠식"; cap_badge = _badge("완전잠식","bad")
-                        else:
-                            cap_str = "정상"; cap_badge = _badge("정상","good")
-                    except: cap_str = "N/A"; cap_badge = _badge("N/A","neutral")
-                    # 총자산/총부채
-                    tast = fin.get("enpTastAmt",""); tdbt = fin.get("enpTdbtAmt","")
-                    try:    tast_str = f"{float(tast):,.0f}"
-                    except: tast_str = "-"
-                    try:    tdbt_str = f"{float(tdbt):,.0f}"
-                    except: tdbt_str = "-"
+                        cap_str = "완전잠식" if tc<=0 else "정상"
+                        cap_b   = _badge(cap_str, "bad" if tc<=0 else "good")
+                    except: cap_str="N/A"; cap_b=_badge("N/A","neutral")
+                    try: tast_s = f"{float(fin.get('enpTastAmt',''))/1e6:,.0f}억"
+                    except: tast_s = "-"
+                    try: tdbt_s = f"{float(fin.get('enpTdbtAmt',''))/1e6:,.0f}억"
+                    except: tdbt_s = "-"
                     st.markdown(
-                        _metric_row("부채비율", dr_str, dr_badge) +
-                        _metric_row("자본잠식", cap_str, cap_badge) +
-                        _metric_row("총자산(백만)", tast_str) +
-                        _metric_row("총부채(백만)", tdbt_str),
+                        _mrow("부채비율", f"{dr:.1f}%" if dr is not None else "-", dr_b) +
+                        _mrow("자본잠식", cap_str, cap_b) +
+                        _mrow("총자산", tast_s) + _mrow("총부채", tdbt_s),
                         unsafe_allow_html=True)
                 else:
                     st.caption("재무 데이터 없음")
@@ -995,104 +977,170 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
             with st.popover("핵심 투자지표", use_container_width=True):
                 st.markdown("**📌 성장 및 수익성 지표**")
                 if fin:
-                    sale = fin.get("enpSaleAmt",""); opr = fin.get("enpBzopPft","")
-                    net  = fin.get("enpCrtmNpf","")
                     try:
-                        s_v = float(sale); o_v = float(opr); n_v = float(net)
-                        opm = o_v / s_v * 100 if s_v != 0 else 0
-                        npm = n_v / s_v * 100 if s_v != 0 else 0
-                        opm_badge = _badge("양호","good") if opm>=10 else (_badge("보통","neutral") if opm>=0 else _badge("위험","bad"))
-                        npm_badge = _badge("양호","good") if npm>=5  else (_badge("보통","neutral") if npm>=0 else _badge("위험","bad"))
-                        opr_badge = _badge("흑자","good") if o_v>=0 else _badge("적자","bad")
+                        s_v = float(fin.get("enpSaleAmt","0") or 0)
+                        o_v = float(fin.get("enpBzopPft","0") or 0)
+                        n_v = float(fin.get("enpCrtmNpf","0") or 0)
+                        opm = o_v/s_v*100 if s_v else 0
+                        npm = n_v/s_v*100 if s_v else 0
                         st.markdown(
-                            _metric_row("매출액(백만)", f"{s_v:,.0f}") +
-                            _metric_row("영업이익(백만)", f"{o_v:,.0f}", opr_badge) +
-                            _metric_row("영업이익률", f"{opm:.1f}%", opm_badge) +
-                            _metric_row("순이익(백만)", f"{n_v:,.0f}") +
-                            _metric_row("순이익률", f"{npm:.1f}%", npm_badge),
+                            _mrow("매출액", f"{s_v/1e6:,.0f}억") +
+                            _mrow("영업이익", f"{o_v/1e6:,.0f}억",
+                                  _badge("흑자","good") if o_v>=0 else _badge("적자","bad")) +
+                            _mrow("영업이익률", f"{opm:.1f}%",
+                                  _badge("양호","good") if opm>=10 else (_badge("보통","neutral") if opm>=0 else _badge("위험","bad"))) +
+                            _mrow("순이익", f"{n_v/1e6:,.0f}억") +
+                            _mrow("순이익률", f"{npm:.1f}%",
+                                  _badge("양호","good") if npm>=5 else (_badge("보통","neutral") if npm>=0 else _badge("위험","bad"))),
                             unsafe_allow_html=True)
                     except: st.caption("수치 계산 불가")
                 else:
                     st.caption("재무 데이터 없음")
 
-        # 기업 기본정보 (업종 등)
-        if outline:
-            st.markdown("")
-            for field, label in [("sicNm","업종"),("enpEstbDt","설립일"),
-                                  ("enpEmpeCnt","직원수"),("enpStacMm","결산월")]:
-                val = outline.get(field,"-") or "-"
+        st.divider()
+
+        # ③ 급등 사유 히스토리
+        st.markdown("#### 🚨 급등 사유 히스토리")
+        # surge_reasons DB에서 단일 사유
+        reason_txt = ""
+        if surge_reasons:
+            rd = surge_reasons.get(str(ticker).zfill(6), {})
+            reason_txt = rd.get("reason","") if isinstance(rd, dict) else ""
+
+        # accumulated.json에서 해당 종목 히스토리 필터
+        _acc = _github_json("data/accumulated.json") or {}
+        _acc_items = _acc.get("items", []) if isinstance(_acc, dict) else []
+        _hist = []
+        _pat  = f"({ticker})"
+        for _it in _acc_items:
+            if _it.get("category","") != "특징 상한가 및 급등종목": continue
+            _txt = _it.get("text","")
+            if _pat not in _txt: continue
+            _entries = _parse_body_entries(_txt)
+            for _e in _entries:
+                if str(_e.get("code","")) == str(ticker):
+                    _d = _it.get("sendDate","")
+                    if len(_d)==8: _d = f"{_d[:4]}.{_d[4:6]}.{_d[6:]}"
+                    _hist.append({"date": _d, "reason": _e.get("reason","")})
+            if not _hist or _hist[-1].get("date","") != _it.get("sendDate",""):
+                # fallback: title만 있는 경우
+                pass
+
+        total = len(_hist) + (1 if reason_txt else 0)
+        if total == 0:
+            st.caption(f"ℹ️ '{name}' 관련 특징주 이력 없음")
+        else:
+            if reason_txt:
                 st.markdown(
-                    f"<div style='display:flex;justify-content:space-between;"
-                    f"padding:4px 0;border-bottom:1px solid #f0f0f0;font-size:0.85em;'>"
-                    f"<span style='color:#888;'>{label}</span>"
-                    f"<span style='font-weight:600;'>{val}</span></div>",
+                    f"<div style='background:#e8f4fd;border-left:3px solid #1976d2;"
+                    f"padding:6px 12px;border-radius:4px;margin:4px 0;font-size:0.88em;'>"
+                    f"<span style='color:#888;font-size:0.85em;'>최근</span>"
+                    f"&nbsp;›&nbsp;{reason_txt}</div>",
+                    unsafe_allow_html=True)
+            for _h in _hist[:7]:
+                st.markdown(
+                    f"<div style='background:#e8f4fd;border-left:3px solid #1976d2;"
+                    f"padding:6px 12px;border-radius:4px;margin:4px 0;font-size:0.88em;'>"
+                    f"<span style='color:#888;font-size:0.85em;'>{_h['date']}</span>"
+                    f"&nbsp;›&nbsp;{_h['reason']}</div>",
                     unsafe_allow_html=True)
 
-        # 6개월 고저 위치
-        if not ohlcv.empty:
-            try:
-                hi_6m = float(ohlcv["High"].max())
-                lo_6m = float(ohlcv["Low"].min())
-                pos   = (cur_price - lo_6m) / (hi_6m - lo_6m) * 100 if hi_6m != lo_6m else 0
-                pos_c = "#c62828" if pos >= 70 else ("#1565c0" if pos <= 30 else "#2e7d32")
-                st.markdown(
-                    f"<div style='background:#f8f9fa;border-radius:8px;padding:10px 12px;margin:8px 0;'>"
-                    f"<div style='font-size:0.78em;color:#888;margin-bottom:6px;'>6개월 고저 위치</div>"
-                    f"<div style='display:flex;justify-content:space-between;font-size:0.82em;color:#666;margin-bottom:4px;'>"
-                    f"<span>저 {int(lo_6m):,}</span><span style='font-weight:700;color:{pos_c};'>{pos:.0f}%</span>"
-                    f"<span>고 {int(hi_6m):,}</span></div>"
-                    f"<div style='background:#ddd;border-radius:4px;height:6px;'>"
-                    f"<div style='background:{pos_c};width:{min(100,max(0,pos)):.0f}%;height:6px;border-radius:4px;'></div>"
-                    f"</div></div>",
-                    unsafe_allow_html=True)
-            except: pass
+        st.divider()
 
-        st.markdown("---")
-
-        # CB/BW 오버행 (P1 스타일 container)
+        # ④ 잠재적 매도 물량 (CB/BW)
         with st.container(border=True):
-            st.markdown("#### 🕵️ CB/BW 잠재 매도 물량")
+            st.markdown("#### 🕵️‍♂️ 잠재적 매도 물량 (미상환 사채 5년)")
             _oh = cb_overhang.get(str(ticker).zfill(6)) or cb_overhang.get(ticker)
             if _oh and isinstance(_oh, list) and len(_oh) > 0:
-                _active = [b for b in _oh if not b.get("is_expired") and b.get("unredeemed", 0) > 0]
+                _active = [b for b in _oh
+                           if not b.get("is_expired") and b.get("unredeemed", 0) > 0]
                 if not _active:
                     st.success("✅ CB/BW 전량 만기상환 또는 전환 완료")
                 else:
-                    _total = sum(b.get("unredeemed", 0) for b in _active)
-                    st.error(f"🚨 미상환잔액 {_total/1e8:.1f}억원 ({len(_active)}건)")
-                    _rows_cb = [{"회차": b.get("series", "-"),
-                                 "잔액(억)": f"{b.get('unredeemed',0)/1e8:.1f}",
+                    _total_u = sum(b.get("unredeemed", 0) for b in _active)
+                    _total_s = sum(b.get("convertible_shares", 0) for b in _active)
+                    st.error(f"🚨 미전환잔액 {_total_u/1e8:.1f}억원 | "
+                             f"전환가능주식수 {_total_s:,}주")
+                    _rows_cb = [{"회차":      b.get("series", "-"),
+                                 "잔액(억)":  f"{b.get('unredeemed',0)/1e8:.1f}",
                                  "전환가(원)": f"{b.get('conversion_price',0):,}",
-                                 "전환기간": b.get("conversion_period", "-")} for b in _active]
-                    st.dataframe(pd.DataFrame(_rows_cb), use_container_width=True, hide_index=True)
-            elif _oh:
-                st.warning("⚠️ 오버행 데이터 있음")
+                                 "전환기간":  b.get("conversion_period","-")}
+                                for b in _active]
+                    st.dataframe(pd.DataFrame(_rows_cb),
+                                 use_container_width=True, hide_index=True)
+                with st.expander("▷ [참고] DART 공시 원문 목록"):
+                    _TYPE2 = {"A":"정기","B":"주요사항","C":"발행","D":"지분",
+                              "F":"외부감사","I":"거래소"}
+                    _ditems = get_dart(ticker)
+                    if _ditems:
+                        for _di in _ditems[:10]:
+                            _rno = _di.get("rcept_no","")
+                            _url = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={_rno}" if _rno else ""
+                            _lbl = f"**[{_di.get('rcept_dt','')[:8]}]** {_di.get('report_nm','')}"
+                            if _url:
+                                st.markdown(f"{_lbl}  \n[공시원문]({_url})")
+                            else:
+                                st.markdown(_lbl)
+                    else:
+                        st.write("공시 없음")
             else:
-                st.success("✅ CB/BW 오버행 없음 (최근 5년)")
+                st.info("ℹ️ 최근 5년 내 CB/BW 발행 공시가 없습니다.")
 
-    # ── 오른쪽: 캔들 차트 ────────────────────────────────────────────────────
+        st.divider()
+
+        # ⑤ 감사보고서 / 상호변경
+        st.markdown("#### 📋 감사보고서 / 상호변경")
+        # DART 공시에서 외부감사 항목 체크
+        _dart_all = get_dart(ticker)
+        _audit_items = [d for d in _dart_all if d.get("pblntf_ty","") == "F"]
+        if _dart_all:
+            if _audit_items:
+                _r1, _r2 = st.columns(2)
+                _r1.warning(f"⚠️ 외부감사 공시 {len(_audit_items)}건")
+                _r2.success("✅ 상호변경: 확인불가 (P1 전용)")
+            else:
+                _r1, _r2 = st.columns(2)
+                _r1.success("✅ 외부감사 공시 없음 (최근 60일)")
+                _r2.success("✅ 상호변경: 확인불가 (P1 전용)")
+        else:
+            st.caption("DART API 키 미설정 또는 공시 조회 불가")
+
+        st.divider()
+
+        # ⑥ 밸류에이션
+        st.markdown("### 📈 밸류에이션")
+        with st.container(border=True):
+            if not ohlcv.empty:
+                try:
+                    hi_6m = float(ohlcv["High"].max())
+                    lo_6m = float(ohlcv["Low"].min())
+                    pos   = (cur_price - lo_6m) / (hi_6m - lo_6m) * 100 if hi_6m != lo_6m else 0
+                    pos_c = "#c62828" if pos>=70 else ("#1565c0" if pos<=30 else "#2e7d32")
+                    pos_lbl = ("🔴 고점권" if pos>=70 else ("🔵 저점권" if pos<=30 else "🟢 중립권"))
+                    if pos >= 70:
+                        st.warning(f"⚠️ **고점권 주의** — 6개월 고저 대비 현재 위치 {pos:.0f}%")
+                    elif pos <= 30:
+                        st.success(f"🛡️ **저점권** — 6개월 고저 대비 현재 위치 {pos:.0f}%")
+                    else:
+                        st.info(f"✅ **중립권** — 6개월 고저 대비 현재 위치 {pos:.0f}%")
+                    st.progress(max(0, min(100, int(pos))),
+                                text=f"현재 주가 위치 ({pos:.0f}%)")
+                    st.markdown(
+                        f"**6개월 고가:** {int(hi_6m):,}원 &nbsp;|&nbsp; "
+                        f"**6개월 저가:** {int(lo_6m):,}원",
+                        unsafe_allow_html=True)
+                    st.caption("※ PER 밸류에이션 밴드는 P1(KIS API) 전용 기능입니다.")
+                except:
+                    st.caption("가격 데이터 계산 불가")
+            else:
+                st.caption("차트 데이터 없음 — 밸류에이션 계산 불가")
+
+    # ════════════════════════════════════════════════════════════════════════
+    # 오른쪽: 캔들 차트
+    # ════════════════════════════════════════════════════════════════════════
     with col_right:
         st.markdown("### 📈 일봉 캔들 차트")
         render_chart(ticker, name)
-
-    # ── 하단: DART 공시 ──────────────────────────────────────────────────────
-    st.markdown("<div class='section-title'>📋 DART 공시 (최근 60일)</div>", unsafe_allow_html=True)
-    _TYPE = {"A": "정기공시", "B": "주요사항", "C": "발행공시", "D": "지분공시",
-             "E": "기타", "F": "외부감사", "I": "거래소공시"}
-    items = get_dart(ticker)
-    if items:
-        rows = [{"날짜": it.get("rcept_dt", "")[:8],
-                 "구분": _TYPE.get(it.get("pblntf_ty", ""), it.get("pblntf_ty", "")),
-                 "제목": it.get("report_nm", ""),
-                 "제출인": it.get("flr_nm", ""),
-                 "링크": f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={it.get('rcept_no', '')}"
-                         if it.get("rcept_no") else ""} for it in items]
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True,
-                     column_config={
-                         "링크": st.column_config.LinkColumn("링크", width="small",
-                                                              display_text="열기")})
-    else:
-        st.caption("최근 공시 없음")
 
 
 _KW_STOP = {"및", "의", "을", "를", "에", "이", "가", "은", "는", "로", "으로",
