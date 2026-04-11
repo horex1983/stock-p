@@ -12,6 +12,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta, date
 from dotenv import load_dotenv
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, ColumnsAutoSizeMode, JsCode
 
 load_dotenv()
 
@@ -709,12 +710,63 @@ def render_sidebar(indices_p1, surge_items, theme_items):
     return "전체"
 
 
+_AGGRID_CSS = {
+    ".ag-header": {
+        "background-color": "#1E2D4E !important",
+        "border-bottom": "2px solid #3A5080 !important",
+    },
+    ".ag-header-cell-label": {
+        "color": "#E8ECF4 !important",
+        "font-weight": "700 !important",
+        "font-size": "13px !important",
+        "letter-spacing": "0.3px",
+    },
+    ".ag-row-selected": {
+        "background-color": "#FFF3E0 !important",
+        "border-left": "3px solid #FF8F00 !important",
+    },
+    ".ag-row:hover": {
+        "background-color": "#EEF4FF !important",
+    },
+    ".ag-cell": {
+        "border-right": "1px solid #F0F0F0 !important",
+        "padding-left": "10px !important",
+        "padding-right": "10px !important",
+    },
+    ".ag-root-wrapper": {
+        "border": "1px solid #DDE3EF !important",
+        "border-radius": "8px !important",
+        "overflow": "hidden",
+        "box-shadow": "0 2px 8px rgba(30,45,78,0.08)",
+    },
+}
+
+_THEME_PALETTE = [
+    '#1565C0', '#AD1457', '#2E7D32', '#E65100', '#6A1B9A',
+    '#00838F', '#558B2F', '#4527A0', '#BF360C', '#00695C',
+    '#283593', '#C62828', '#37474F', '#F57F17', '#0277BD',
+]
+
+_SIGNAL_STYLE = JsCode("""
+    function(params) {
+        var v = params.value || '';
+        var base = {'fontWeight': '700', 'fontSize': '12px', 'display': 'flex', 'alignItems': 'center'};
+        if (v.includes('과열'))  return Object.assign(base, {'color': '#6A1B9A'});
+        if (v.includes('강력'))  return Object.assign(base, {'color': '#B71C1C'});
+        if (v.includes('매수') && !v.includes('고려')) return Object.assign(base, {'color': '#2E7D32'});
+        if (v.includes('고려'))  return Object.assign(base, {'color': '#F57F17'});
+        if (v.includes('관망'))  return Object.assign(base, {'color': '#9E9E9E', 'fontWeight': '400'});
+        return base;
+    }
+""")
+
+
 def render_p1_table(surge_table, rsi_snapshot, watchlist=None, market_filter="전체"):
-    """Display P1 exported surge table (tier/theme/risk pre-computed by P1)."""
+    """Display P1 exported surge table using AgGrid (matches P1 style)."""
     df = pd.DataFrame(surge_table)
     if df.empty:
         return None
-    df.insert(0, "순위", range(1, len(df) + 1))
+
     # RSI signals from rsi_snapshot.json
     def _sig(t, suffix):
         d = rsi_snapshot.get(f"{t}{suffix}", {})
@@ -723,9 +775,13 @@ def render_p1_table(surge_table, rsi_snapshot, watchlist=None, market_filter="�
     df["단기신호"] = df["종목코드"].apply(lambda t: _sig(t, "_5m"))
     df["장기신호"] = df["종목코드"].apply(lambda t: _sig(t, "_weekly"))
 
+    # tier 컬럼명 P1과 통일 (tier → Tier)
+    if "tier" in df.columns:
+        df = df.rename(columns={"tier": "Tier"})
+
     # ★ watchlist marker — sort watchlist items first
     _wl = set(str(c).zfill(6) for c in (watchlist or []))
-    df.insert(0, "★", df["종목코드"].apply(lambda c: "★" if str(c).zfill(6) in _wl else ""))
+    df["★"] = df["종목코드"].apply(lambda c: "★" if str(c).zfill(6) in _wl else "")
     df = df.sort_values("★", ascending=False, kind="stable")
 
     if market_filter != "전체":
@@ -738,29 +794,162 @@ def render_p1_table(surge_table, rsi_snapshot, watchlist=None, market_filter="�
                 df["종목코드"].str.contains(search, na=False))
         df = df[mask]
 
-    disp_cols = ["★", "순위", "종목코드", "종목명", "시장", "현재가", "당일등락",
-                 "7일누적", "거래대금", "tier", "테마", "신호", "단기신호", "장기신호", "리스크"]
-    disp = df[[c for c in disp_cols if c in df.columns]].copy()
-    col_cfg = {
-        "★":      st.column_config.TextColumn(width="small"),
-        "순위":    st.column_config.NumberColumn(width="small"),
-        "종목코드": st.column_config.TextColumn("코드", width="small"),
-        "종목명":  st.column_config.TextColumn(width="small"),
-        "tier":   st.column_config.TextColumn("티어", width="small"),
-        "현재가":  st.column_config.NumberColumn(format="%d", width="small"),
-        "당일등락": st.column_config.NumberColumn(label="당일(%)", format="%.2f%%", width="small"),
-        "7일누적": st.column_config.NumberColumn(label="7일(%)", format="%.2f%%", width="small"),
-        "거래대금": st.column_config.NumberColumn(label="거래대금", format="%.1f", width="small"),
-        "테마":    st.column_config.TextColumn(width="small"),
-        "신호":    st.column_config.TextColumn(width="small"),
-        "단기신호": st.column_config.TextColumn("단기", width="small"),
-        "장기신호": st.column_config.TextColumn("장기", width="small"),
-        "리스크":  st.column_config.TextColumn(width="small"),
-    }
-    selected = st.dataframe(disp, use_container_width=True, hide_index=True,
-                            on_select="rerun", selection_mode="single-row",
-                            column_config=col_cfg, height=470)
-    return selected, df
+    _ordered = ["★", "Tier", "종목코드", "종목명", "테마", "신호", "단기신호",
+                "현재가", "당일등락", "7일누적", "거래대금", "장기신호", "리스크", "시장"]
+    df_table = df[[c for c in _ordered if c in df.columns]].copy()
+
+    # 숫자 컬럼 타입 보장
+    for col in ["현재가", "당일등락", "7일누적", "거래대금"]:
+        if col in df_table.columns:
+            df_table[col] = pd.to_numeric(df_table[col], errors="coerce").fillna(0)
+
+    # 테마 컬러맵
+    unique_themes = [t for t in df_table.get("테마", pd.Series(dtype=str)).unique() if t]
+    theme_color_map = {t: _THEME_PALETTE[i % len(_THEME_PALETTE)]
+                       for i, t in enumerate(unique_themes)}
+    theme_color_js = str(theme_color_map).replace("'", '"')
+
+    gb = GridOptionsBuilder.from_dataframe(df_table)
+    gb.configure_selection(selection_mode="single", use_checkbox=False)
+    gb.configure_grid_options(
+        rowHeight=42,
+        headerHeight=46,
+        rowStyle={"cursor": "pointer"},
+        getRowStyle=JsCode("""
+            function(params) {
+                var star = (params.data && params.data['★']) || '';
+                var cum7 = parseFloat((params.data && params.data['7일누적']) || 0) || 0;
+                var dim = cum7 < 40;
+                if (star === '★') {
+                    return dim
+                        ? {'background': '#F0E8C0', 'borderLeft': '3px solid #F9A825', 'color': '#999'}
+                        : {'background': '#FFFDE7', 'borderLeft': '3px solid #F9A825'};
+                }
+                if (dim) {
+                    return params.node.rowIndex % 2 === 0
+                        ? {'background': '#E6E8EE', 'color': '#999'}
+                        : {'background': '#ECEEF3', 'color': '#999'};
+                }
+                if (params.node.rowIndex % 2 === 0) return {'background': '#FAFBFD'};
+                return {'background': '#FFFFFF'};
+            }
+        """),
+    )
+    gb.configure_default_column(resizable=True, suppressSizeToFit=True)
+    gb.configure_column("★",   hide=True)
+    gb.configure_column("시장", hide=True)
+    gb.configure_column("Tier", headerName="등급", width=105, sort="desc",
+        comparator=JsCode("""
+            function(a, b) {
+                var order = {'🏆 S':5,'🟢 A':4,'🟡 B':3,'🟠 C':2,'🔴 D':1};
+                return (order[a]||0) - (order[b]||0);
+            }
+        """),
+        cellStyle=JsCode("""
+            function(params) {
+                var v = params.value || '';
+                var base = {'fontWeight':'700','fontSize':'13px','display':'flex','alignItems':'center','justifyContent':'center'};
+                if (v.includes('S')) return Object.assign(base, {'color':'#B8860B'});
+                if (v.includes('A')) return Object.assign(base, {'color':'#2E7D32'});
+                if (v.includes('B')) return Object.assign(base, {'color':'#F57F17'});
+                if (v.includes('C')) return Object.assign(base, {'color':'#E65100'});
+                if (v.includes('D')) return Object.assign(base, {'color':'#C62828'});
+                return base;
+            }
+        """))
+    gb.configure_column("종목코드", headerName="코드", width=80,
+        cellStyle={"color": "#888", "fontSize": "12px", "display": "flex", "alignItems": "center"})
+    gb.configure_column("종목명", width=120, cellStyle=JsCode(f"""
+        function(params) {{
+            var market = (params.data && params.data['시장']) || '';
+            var base = {{'fontWeight':'600','fontSize':'14px','display':'flex','alignItems':'center'}};
+            if (market === 'KOSPI')  return Object.assign(base, {{'color':'#1565C0'}});
+            if (market === 'KOSDAQ') return Object.assign(base, {{'color':'#E65100'}});
+            return base;
+        }}
+    """))
+    gb.configure_column("테마", width=85, cellStyle=JsCode(f"""
+        function(params) {{
+            var v = params.value || '';
+            var colorMap = {theme_color_js};
+            var color = colorMap[v] || '#555';
+            return {{'color': color, 'fontWeight':'600','fontSize':'12px','display':'flex','alignItems':'center'}};
+        }}
+    """))
+    gb.configure_column("신호",    headerName="신호",    width=90,  cellStyle=_SIGNAL_STYLE)
+    gb.configure_column("단기신호", headerName="단기신호", width=100, cellStyle=_SIGNAL_STYLE)
+    gb.configure_column("현재가", width=95,
+        type=["numericColumn"],
+        valueFormatter=JsCode("function(p){var v=p.value; return v?Number(v).toLocaleString('ko-KR')+'원':'-'}"),
+        cellStyle={"color": "#222", "fontWeight": "500", "display": "flex", "alignItems": "center"})
+    gb.configure_column("당일등락", headerName="당일등락", width=85,
+        type=["numericColumn"],
+        valueFormatter=JsCode("function(p){var v=parseFloat(p.value)||0; return (v>=0?'+':'')+v.toFixed(2)+'%'}"),
+        cellStyle=JsCode("""
+            function(params) {
+                var v = parseFloat(params.value) || 0;
+                var base = {'fontWeight':'700','fontSize':'14px','display':'flex','alignItems':'center'};
+                if (v > 0) return Object.assign(base, {'color':'#C62828'});
+                if (v < 0) return Object.assign(base, {'color':'#1565C0'});
+                return base;
+            }
+        """))
+    gb.configure_column("7일누적", headerName="7일누적", width=90,
+        type=["numericColumn"],
+        valueFormatter=JsCode("function(p){var v=parseFloat(p.value)||0; return v.toFixed(2)+'%'}"),
+        cellStyle=JsCode("""
+            function(params) {
+                var v = parseFloat(params.value) || 0;
+                var base = {'fontWeight':'700','fontSize':'14px','display':'flex','alignItems':'center'};
+                if (v > 0) return Object.assign(base, {'color':'#B71C1C'});
+                if (v < 0) return Object.assign(base, {'color':'#1565C0'});
+                return base;
+            }
+        """))
+    gb.configure_column("거래대금", headerName="거래대금", width=85,
+        type=["numericColumn"],
+        valueFormatter=JsCode("""
+            function(p) {
+                var v = parseFloat(p.value) || 0;
+                if (v >= 10000) return (v/10000).toFixed(1)+'조';
+                if (v >= 1000)  return (v/1000).toFixed(1)+'천억';
+                return v.toFixed(0)+'억';
+            }
+        """),
+        cellStyle={"color": "#444", "display": "flex", "alignItems": "center"})
+    gb.configure_column("장기신호", headerName="장기신호", width=95,
+        cellStyle=JsCode("""
+            function(params) {
+                var v = params.value || '';
+                var base = {'fontWeight':'700','fontSize':'12px','display':'flex','alignItems':'center'};
+                if (v.includes('양호')) return Object.assign(base, {'color':'#1565C0'});
+                if (v.includes('주의')) return Object.assign(base, {'color':'#E65100'});
+                return Object.assign(base, {'color':'#9E9E9E','fontWeight':'400'});
+            }
+        """))
+    gb.configure_column("리스크", width=95,
+        cellStyle=JsCode("""
+            function(params) {
+                var v = params.value || '';
+                var base = {'fontSize':'12px','display':'flex','alignItems':'center'};
+                if (v.includes('🚨') || v.includes('🔴')) return Object.assign(base, {'color':'#C62828','fontWeight':'700'});
+                if (v.includes('⚡') || v.includes('⚠️')) return Object.assign(base, {'color':'#E65100','fontWeight':'700'});
+                return Object.assign(base, {'color':'#bbb'});
+            }
+        """))
+
+    ag = AgGrid(
+        df_table,
+        gridOptions=gb.build(),
+        update_mode=GridUpdateMode.SELECTION_CHANGED,
+        columns_auto_size_mode=ColumnsAutoSizeMode.FIT_CONTENTS,
+        use_container_width=True,
+        allow_unsafe_jscode=True,
+        custom_css=_AGGRID_CSS,
+        height=470,
+        key="p2_surge_table",
+    )
+    return ag, df
 
 
 def render_watchlist_table(wdf):
@@ -1174,12 +1363,14 @@ def main():
                         unsafe_allow_html=True)
             result = render_p1_table(surge_table, rsi_snapshot, watchlist, market_filter)
             if result:
-                selected, df_p1 = result
-                rows = selected.selection.rows if hasattr(selected, "selection") else []
-                if rows:
-                    row = df_p1.iloc[rows[0]]
-                    st.session_state.sel_ticker_surge = str(row["종목코드"]).zfill(6)
-                    st.session_state.sel_name_surge   = row["종목명"]
+                ag, df_p1 = result
+                _sel = ag.selected_rows
+                if _sel is not None and not _sel.empty:
+                    _new = str(_sel.iloc[0]["종목코드"]).zfill(6)
+                    if _new != st.session_state.get("sel_ticker_surge", ""):
+                        st.session_state.sel_ticker_surge = _new
+                        st.session_state.sel_name_surge   = _sel.iloc[0]["종목명"]
+                        st.rerun()
                 if st.session_state.sel_ticker_surge:
                     render_detail(st.session_state.sel_ticker_surge,
                                   st.session_state.sel_name_surge,
