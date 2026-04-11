@@ -1162,51 +1162,95 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
         st.divider()
 
         # ⑤ 감사보고서 / 상호변경
-        st.markdown("#### 📋 감사보고서 / 상호변경")
-        # DART 공시에서 외부감사 항목 체크
-        _dart_all = get_dart(ticker)
-        _audit_items = [d for d in _dart_all if d.get("pblntf_ty","") == "F"]
-        if _dart_all:
-            if _audit_items:
-                _r1, _r2 = st.columns(2)
-                _r1.warning(f"⚠️ 외부감사 공시 {len(_audit_items)}건")
-                _r2.success("✅ 상호변경: 확인불가 (P1 전용)")
-            else:
-                _r1, _r2 = st.columns(2)
-                _r1.success("✅ 외부감사 공시 없음 (최근 60일)")
-                _r2.success("✅ 상호변경: 확인불가 (P1 전용)")
-        else:
-            st.caption("최근 60일 DART 공시 없음")
+        with st.container(border=True):
+            st.markdown("#### 📋 감사보고서 / 상호변경")
+            gov = corp.get("gov_risk", {}) if isinstance(corp.get("gov_risk"), dict) else {}
+
+            _gc1, _gc2 = st.columns(2)
+
+            # 감사의견
+            with _gc1:
+                if gov:
+                    _bad   = gov.get("bad_audit", False)
+                    _gc    = gov.get("going_concern", False)
+                    _adet  = gov.get("audit_details", "")
+                    _arno  = gov.get("audit_rcept_no", "")
+                    if _bad:
+                        st.error(f"🚨 비적정 감사의견 — {_adet}")
+                    elif _gc:
+                        st.warning(f"⚠️ 계속기업 불확실 — {_adet}")
+                    else:
+                        st.success(f"✅ 감사의견 정상 — {_adet}")
+                    if _arno:
+                        _dart_url = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={_arno}"
+                        st.markdown(f"[📄 감사보고서 원문 보기]({_dart_url})")
+                else:
+                    # fallback: DART 공시에서 외부감사 항목 확인
+                    _dart_all  = get_dart(ticker)
+                    _audit_it  = [d for d in _dart_all if d.get("pblntf_ty","") == "F"]
+                    if _audit_it:
+                        st.warning(f"⚠️ 외부감사 공시 {len(_audit_it)}건 (P1 미수집)")
+                    else:
+                        st.info("ℹ️ 감사의견 미수집 (P1 상세보기 후 갱신)")
+
+            # 상호변경
+            with _gc2:
+                if gov:
+                    _nc   = gov.get("name_change_count", 0)
+                    _past = gov.get("past_names", "")
+                    if _nc and _nc > 0:
+                        st.warning(f"⚠️ 상호변경 {_nc}회 — 前: {_past}")
+                    else:
+                        st.success("✅ 상호변경 이력 없음")
+                else:
+                    st.info("ℹ️ 상호변경 이력 미수집")
 
         st.divider()
 
         # ⑥ 밸류에이션
-        st.markdown("### 📈 밸류에이션")
+        st.markdown("#### 📈 밸류에이션")
         with st.container(border=True):
-            if not ohlcv.empty:
-                try:
-                    hi_6m = float(ohlcv["High"].max())
-                    lo_6m = float(ohlcv["Low"].min())
-                    pos   = (cur_price - lo_6m) / (hi_6m - lo_6m) * 100 if hi_6m != lo_6m else 0
-                    pos_c = "#c62828" if pos>=70 else ("#1565c0" if pos<=30 else "#2e7d32")
-                    pos_lbl = ("🔴 고점권" if pos>=70 else ("🔵 저점권" if pos<=30 else "🟢 중립권"))
-                    if pos >= 70:
-                        st.warning(f"⚠️ **고점권 주의** — 6개월 고저 대비 현재 위치 {pos:.0f}%")
-                    elif pos <= 30:
-                        st.success(f"🛡️ **저점권** — 6개월 고저 대비 현재 위치 {pos:.0f}%")
-                    else:
-                        st.info(f"✅ **중립권** — 6개월 고저 대비 현재 위치 {pos:.0f}%")
-                    st.progress(max(0, min(100, int(pos))),
-                                text=f"현재 주가 위치 ({pos:.0f}%)")
+            # KIS 재무비율 (PER/PBR/ROE)
+            _v1, _v2 = st.columns([1, 1])
+            with _v1:
+                _per = kis_ratio.get("per", "") or kis_ratio.get("PER", "")
+                _pbr = kis_ratio.get("pbr", "") or kis_ratio.get("PBR", "")
+                _roe = kis_ratio.get("roe_val", "") or kis_ratio.get("ROE", "")
+                _eps = kis_ratio.get("eps", "") or kis_ratio.get("EPS", "")
+                _has_kis = any([_per, _pbr, _roe, _eps])
+                if _has_kis:
+                    def _fv(v, suffix="배"):
+                        try: return f"{float(v):.1f}{suffix}"
+                        except: return str(v) if v else "-"
                     st.markdown(
-                        f"**6개월 고가:** {int(hi_6m):,}원 &nbsp;|&nbsp; "
-                        f"**6개월 저가:** {int(lo_6m):,}원",
-                        unsafe_allow_html=True)
-                    st.caption("※ PER 밸류에이션 밴드는 P1(KIS API) 전용 기능입니다.")
-                except:
-                    st.caption("가격 데이터 계산 불가")
-            else:
-                st.caption("차트 데이터 없음 — 밸류에이션 계산 불가")
+                        f"| 지표 | 값 |\n|---|---|\n"
+                        f"| PER | {_fv(_per)} |\n"
+                        f"| PBR | {_fv(_pbr)} |\n"
+                        f"| ROE | {_fv(_roe, '%')} |\n"
+                        f"| EPS | {_fv(_eps, '원')} |",
+                        unsafe_allow_html=False)
+                else:
+                    st.caption("KIS 재무비율 미수집")
+
+            with _v2:
+                if not ohlcv.empty:
+                    try:
+                        hi_6m = float(ohlcv["High"].max())
+                        lo_6m = float(ohlcv["Low"].min())
+                        pos   = (cur_price - lo_6m) / (hi_6m - lo_6m) * 100 if hi_6m != lo_6m else 0
+                        if pos >= 70:
+                            st.warning(f"⚠️ **고점권** — 6개월 위치 {pos:.0f}%")
+                        elif pos <= 30:
+                            st.success(f"🛡️ **저점권** — 6개월 위치 {pos:.0f}%")
+                        else:
+                            st.info(f"✅ **중립권** — 6개월 위치 {pos:.0f}%")
+                        st.progress(max(0, min(100, int(pos))),
+                                    text=f"주가 위치 {pos:.0f}%")
+                        st.caption(f"고가 {int(hi_6m):,}원  |  저가 {int(lo_6m):,}원")
+                    except:
+                        st.caption("위치 계산 불가")
+                else:
+                    st.caption("OHLCV 데이터 없음")
 
     # ════════════════════════════════════════════════════════════════════════
     # 오른쪽: 캔들 차트
