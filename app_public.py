@@ -1,6 +1,6 @@
 """
 app_public.py — 급등주 모멘텀 대시보드 (공개 배포용)
-합법 소스: 금융위원회 공공API + DART + yfinance + GitHub 공유데이터
+데이터 소스: P1 → GitHub JSON → _github_json() 단일 경로
 """
 
 import os, json, base64, logging, requests, re
@@ -10,7 +10,6 @@ import streamlit.components.v1 as _components
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import yfinance as yf
 from datetime import datetime, timedelta, date
 from dotenv import load_dotenv
 
@@ -42,7 +41,6 @@ def _secret(key, default=""):
     return v.strip() if isinstance(v, str) else v
 
 
-DART_API_KEY = _secret("DART_API_KEY")
 GITHUB_TOKEN        = _secret("GITHUB_TOKEN")
 GITHUB_REPO         = _secret("GITHUB_REPO")
 GITHUB_BRANCH       = _secret("GITHUB_BRANCH", "main")
@@ -350,17 +348,20 @@ def get_corp_info(ticker):
     return d.get(str(ticker).zfill(6), {})
 
 
-@st.cache_data(ttl=900)
+@st.cache_data(ttl=300)
 def get_ohlcv(ticker):
-    for suffix in [".KS", ".KQ"]:
-        try:
-            df = yf.download(ticker + suffix, period="6mo", progress=False, auto_adjust=True)
-            if not df.empty:
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
-                return df
-        except: pass
-    return pd.DataFrame()
+    """OHLCV — P1 ohlcv_cache.json (급등주+관심종목 6개월 일봉)."""
+    d = _github_json("data/ohlcv_cache.json")
+    if not isinstance(d, dict):
+        return pd.DataFrame()
+    rows = d.get(str(ticker).zfill(6))
+    if not rows or not isinstance(rows, list):
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.set_index("date")
+    df.columns = [c.capitalize() for c in df.columns]  # open→Open, etc.
+    return df
 
 
 def render_chart(ticker, name):
@@ -413,25 +414,21 @@ def render_chart(ticker, name):
                   row=2, col=1)
     fig.update_layout(
         template="plotly_white", height=550, margin=dict(l=10, r=10, t=30, b=10),
-        title=dict(text=f"{name} ({ticker}) - 6개월 (15분 지연)", font=dict(size=13), x=0),
+        title=dict(text=f"{name} ({ticker}) - 6개월", font=dict(size=13), x=0),
         xaxis_rangeslider_visible=False, legend=dict(orientation="h", y=1.08, x=0))
     fig.update_yaxes(gridcolor="#eeeeee")
     fig.update_xaxes(gridcolor="#eeeeee")
     st.plotly_chart(fig, use_container_width=True)
 
 
-@st.cache_data(ttl=1800)
+@st.cache_data(ttl=300)
 def get_dart(ticker):
-    if not DART_API_KEY: return []
-    try:
-        end = datetime.now()
-        r = requests.get("https://opendart.fss.or.kr/api/list.json", params={
-            "crtfc_key": DART_API_KEY, "stock_code": ticker,
-            "bgn_de": (end - timedelta(days=60)).strftime("%Y%m%d"),
-            "end_de": end.strftime("%Y%m%d"), "page_count": 20}, timeout=10)
-        d = r.json()
-        return d.get("list", []) if d.get("status") == "000" else []
-    except: return []
+    """DART 공시 목록 — P1 dart_cache.json (최근 60일)."""
+    d = _github_json("data/dart_cache.json")
+    if not isinstance(d, dict):
+        return []
+    items = d.get(str(ticker).zfill(6), [])
+    return items if isinstance(items, list) else []
 
 
 def _tier(flt_rt):
@@ -464,7 +461,7 @@ def _make_display_df(df, surge_reasons=None):
     return disp
 
 
-def render_sidebar(indices_pub, indices_p1, surge_items, theme_items):
+def render_sidebar(indices_p1, surge_items, theme_items):
     def _idx_card(label, close_val, chg, status_txt, border_color):
         close_str = f"{close_val:,.2f}" if close_val else "-"
         if chg is None:
@@ -702,7 +699,7 @@ def render_sidebar(indices_pub, indices_p1, surge_items, theme_items):
             f"</div>"
             f"<div style='font-size:0.78em;color:#888;margin-bottom:8px;'>"
             f"수집: {exported_at[:16] if exported_at else '-'} &nbsp;·&nbsp; "
-            f"장: {_mkt_label} &nbsp;·&nbsp; 차트: yfinance 15분 지연"
+            f"장: {_mkt_label} &nbsp;·&nbsp; 차트: P1 OHLCV (30분 지연)"
             f"</div>",
             unsafe_allow_html=True)
 
@@ -766,35 +763,6 @@ def render_p1_table(surge_table, rsi_snapshot, watchlist=None, market_filter="�
     return selected, df
 
 
-def render_table(df, surge_reasons, market_filter="전체"):
-    """Fallback table using public API data (when P1 surge_table unavailable)."""
-    if df.empty:
-        st.warning("공공데이터 API 응답 없음.")
-        return None
-    filtered = df.copy()
-    if market_filter != "전체":
-        filtered = filtered[filtered["mrktCtg"].str.upper() == market_filter.upper()]
-    # Search box
-    search = st.text_input("🔍 종목 검색", placeholder="종목명 또는 코드 입력",
-                            label_visibility="collapsed")
-    if search:
-        mask = (filtered["itmsNm"].str.contains(search, na=False) |
-                filtered["srtnCd"].str.contains(search, na=False))
-        filtered = filtered[mask]
-    disp = _make_display_df(filtered, surge_reasons)
-    col_cfg = {
-        "순위":      st.column_config.NumberColumn(width="small"),
-        "티어":      st.column_config.TextColumn(width="small"),
-        "등락률(%)": st.column_config.NumberColumn(format="%.2f%%", width="small"),
-        "거래량":    st.column_config.NumberColumn(format="%d"),
-        "급등이유":  st.column_config.TextColumn(width="large"),
-    }
-    selected = st.dataframe(disp, use_container_width=True, hide_index=True,
-                            on_select="rerun", selection_mode="single-row",
-                            column_config=col_cfg)
-    return selected, filtered
-
-
 def render_watchlist_table(wdf):
     disp = _make_display_df(wdf)
     col_cfg = {
@@ -805,62 +773,6 @@ def render_watchlist_table(wdf):
                             on_select="rerun", selection_mode="single-row",
                             column_config=col_cfg)
     return selected, wdf
-
-
-def _rsi_gauge(label, rsi_val, signal):
-    """Render a compact Plotly RSI gauge chart."""
-    try:
-        v = float(rsi_val)
-    except (TypeError, ValueError):
-        v = None
-
-    if v is None:
-        bar_color = "#30363d"
-        needle_v  = 50
-    elif v >= 70:
-        bar_color = "#f85149"   # overbought — red
-        needle_v  = v
-    elif v <= 30:
-        bar_color = "#58a6ff"   # oversold — blue
-        needle_v  = v
-    else:
-        bar_color = "#3fb950"   # neutral — green
-        needle_v  = v
-
-    display = f"{v:.1f}" if v is not None else "-"
-
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number",
-        value=needle_v if v is not None else 50,
-        number={"suffix": "", "font": {"size": 22, "color": bar_color}},
-        title={"text": f"<b>{label}</b><br><span style='font-size:0.75em;color:#8b949e'>{signal}</span>",
-               "font": {"size": 12, "color": "#8b949e"}},
-        gauge={
-            "axis": {"range": [0, 100], "tickwidth": 1, "tickcolor": "#30363d",
-                     "tickvals": [0, 30, 50, 70, 100],
-                     "ticktext": ["0", "30", "50", "70", "100"],
-                     "tickfont": {"size": 9, "color": "#8b949e"}},
-            "bar":  {"color": bar_color, "thickness": 0.25},
-            "bgcolor": "#161b22",
-            "borderwidth": 0,
-            "steps": [
-                {"range": [0,  30], "color": "#0d2137"},
-                {"range": [30, 70], "color": "#1a1f2e"},
-                {"range": [70, 100], "color": "#2d0d0d"},
-            ],
-            "threshold": {
-                "line": {"color": "#f0f6fc", "width": 2},
-                "thickness": 0.75,
-                "value": needle_v if v is not None else 50,
-            },
-        },
-    ))
-    fig.update_layout(
-        height=160, margin=dict(l=10, r=10, t=40, b=5),
-        paper_bgcolor="#161b22", plot_bgcolor="#161b22",
-        font={"color": "#f0f6fc"},
-    )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 
 def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
@@ -908,8 +820,13 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
     week_color = "#c62828" if week_chg  >= 0 else "#1565c0"
     week_sign  = "▲"       if week_chg  >= 0 else "▼"
 
-    outline = corp.get("outline", {})
-    fin     = corp.get("financial", {})
+    outline     = corp.get("outline", {})
+    # KIS 재무 데이터 우선, 없으면 공공데이터 fallback
+    kis_ratio   = corp.get("kis_fin_ratio", {})   or {}
+    kis_stab    = corp.get("kis_stability", {})   or {}
+    kis_income  = corp.get("kis_income", {})      or {}
+    kis_basic   = corp.get("kis_basic", {})       or {}
+    fin_pub     = corp.get("financial_pub", {})   or corp.get("financial", {})
 
     # ── 헤더 (full width) ────────────────────────────────────────────────────
     _hdr_col, _nv_col = st.columns([5, 1])
@@ -927,6 +844,18 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
     with col_left:
 
         # ① 핵심 요약 카드
+        _sic   = outline.get("sicNm", "") or kis_basic.get("bstp_kor_isnm", "")
+        _estb  = outline.get("enpEstbDt", "")
+        _estb_fmt = f"{_estb[:4]}.{_estb[4:6]}.{_estb[6:]}" if len(_estb) == 8 else _estb
+        _emp   = outline.get("enpEmpeCnt", "")
+        _meta_row = ""
+        if _sic or _estb_fmt or _emp:
+            _parts = []
+            if _sic:     _parts.append(f"업종: {_sic}")
+            if _estb_fmt:_parts.append(f"설립: {_estb_fmt}")
+            if _emp:     _parts.append(f"직원: {_emp}명")
+            _meta_row = (f"<div style='font-size:0.75em;color:#999;margin-top:6px;'>"
+                         f"{' &nbsp;·&nbsp; '.join(_parts)}</div>")
         st.markdown(
             f"<div style='background:#f8f9fa;border-radius:12px;"
             f"padding:16px 20px;margin-bottom:8px;'>"
@@ -940,7 +869,7 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
             f"<div><div style='font-size:0.75em;color:#999;'>7일 누적</div>"
             f"<div style='font-size:1.2em;font-weight:600;color:{week_color};'>"
             f"{week_sign}{abs(week_chg):.1f}%</div></div>"
-            f"</div></div>",
+            f"</div>{_meta_row}</div>",
             unsafe_allow_html=True)
 
         # ② 팝업 버튼 2개
@@ -948,54 +877,82 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
         with _pc1:
             with st.popover("10초 재무 확인", use_container_width=True):
                 st.markdown("**🛡️ 재무 안정성 지표**")
-                if fin:
-                    st.caption(f"기준: {fin.get('bizYear','')}년")
-                    debt_rto = fin.get("fnclDebtRto","")
+                _has_stab = bool(kis_stab or fin_pub)
+                if _has_stab:
+                    # 부채비율: KIS stability > 공공데이터
                     try:
-                        dr = float(debt_rto)
+                        dr = float(kis_stab.get("lblt_rate","") or fin_pub.get("fnclDebtRto","") or 0)
                         dr_b = _badge("양호","good") if 0<dr<=100 else (_badge("주의","warn") if dr<=200 else _badge("위험","bad"))
                     except: dr = None; dr_b = _badge("N/A","neutral")
-                    tcpt = fin.get("enpTcptAmt","")
+                    # 유동비율 (KIS)
+                    try: curr_r = float(kis_stab.get("crnt_rate","") or 0)
+                    except: curr_r = None
+                    # 자본잠식 (공공데이터)
                     try:
-                        tc = float(tcpt)
+                        tc = float(fin_pub.get("enpTcptAmt","") or 0)
                         cap_str = "완전잠식" if tc<=0 else "정상"
                         cap_b   = _badge(cap_str, "bad" if tc<=0 else "good")
-                    except: cap_str="N/A"; cap_b=_badge("N/A","neutral")
-                    try: tast_s = f"{float(fin.get('enpTastAmt',''))/1e6:,.0f}억"
+                    except: cap_str = "-"; cap_b = _badge("N/A","neutral")
+                    # 총자산/총부채 (공공데이터 우선, KIS balance_sheet fallback)
+                    try: tast_s = f"{float(fin_pub.get('enpTastAmt','') or 0)/1e6:,.0f}억"
                     except: tast_s = "-"
-                    try: tdbt_s = f"{float(fin.get('enpTdbtAmt',''))/1e6:,.0f}억"
+                    try: tdbt_s = f"{float(fin_pub.get('enpTdbtAmt','') or 0)/1e6:,.0f}억"
                     except: tdbt_s = "-"
-                    st.markdown(
+                    rows_html = (
                         _mrow("부채비율", f"{dr:.1f}%" if dr is not None else "-", dr_b) +
+                        (_mrow("유동비율", f"{curr_r:.1f}%",
+                               _badge("양호","good") if curr_r and curr_r>=200 else (_badge("주의","warn") if curr_r and curr_r>=100 else _badge("위험","bad")))
+                         if curr_r else "") +
                         _mrow("자본잠식", cap_str, cap_b) +
-                        _mrow("총자산", tast_s) + _mrow("총부채", tdbt_s),
-                        unsafe_allow_html=True)
+                        _mrow("총자산", tast_s) + _mrow("총부채", tdbt_s)
+                    )
+                    st.markdown(rows_html, unsafe_allow_html=True)
+                    # KIS 출처 표시
+                    if kis_stab:
+                        st.caption("출처: KIS API (안정성비율)")
+                    else:
+                        st.caption("출처: 금융위원회 공공데이터 (P1 export)")
                 else:
-                    st.caption("재무 데이터 없음")
+                    st.caption("재무 데이터 없음 (P1 export 필요)")
 
         with _pc2:
             with st.popover("핵심 투자지표", use_container_width=True):
                 st.markdown("**📌 성장 및 수익성 지표**")
-                if fin:
+                _has_income = bool(kis_income or fin_pub)
+                if _has_income:
                     try:
-                        s_v = float(fin.get("enpSaleAmt","0") or 0)
-                        o_v = float(fin.get("enpBzopPft","0") or 0)
-                        n_v = float(fin.get("enpCrtmNpf","0") or 0)
+                        # 매출액: KIS income_statement > 공공데이터
+                        s_v = float(kis_income.get("sale_account","") or fin_pub.get("enpSaleAmt","") or 0)
+                        o_v = float(kis_income.get("bsop_prti","")    or fin_pub.get("enpBzopPft","") or 0)
+                        n_v = float(kis_income.get("thtr_ntin","")    or fin_pub.get("enpCrtmNpf","") or 0)
                         opm = o_v/s_v*100 if s_v else 0
                         npm = n_v/s_v*100 if s_v else 0
-                        st.markdown(
-                            _mrow("매출액", f"{s_v/1e6:,.0f}억") +
-                            _mrow("영업이익", f"{o_v/1e6:,.0f}억",
+                        # PER/PBR/ROE (KIS 재무비율)
+                        per_v  = kis_ratio.get("per","")
+                        pbr_v  = kis_ratio.get("pbr","")
+                        roe_v  = kis_ratio.get("roe_val","")
+                        rows_html = (
+                            _mrow("매출액", f"{s_v/1e8:,.0f}억") +
+                            _mrow("영업이익", f"{o_v/1e8:,.0f}억",
                                   _badge("흑자","good") if o_v>=0 else _badge("적자","bad")) +
                             _mrow("영업이익률", f"{opm:.1f}%",
                                   _badge("양호","good") if opm>=10 else (_badge("보통","neutral") if opm>=0 else _badge("위험","bad"))) +
-                            _mrow("순이익", f"{n_v/1e6:,.0f}억") +
+                            _mrow("순이익", f"{n_v/1e8:,.0f}억") +
                             _mrow("순이익률", f"{npm:.1f}%",
-                                  _badge("양호","good") if npm>=5 else (_badge("보통","neutral") if npm>=0 else _badge("위험","bad"))),
-                            unsafe_allow_html=True)
-                    except: st.caption("수치 계산 불가")
+                                  _badge("양호","good") if npm>=5 else (_badge("보통","neutral") if npm>=0 else _badge("위험","bad")))
+                        )
+                        if per_v: rows_html += _mrow("PER", f"{float(per_v):.1f}배")
+                        if pbr_v: rows_html += _mrow("PBR", f"{float(pbr_v):.1f}배")
+                        if roe_v: rows_html += _mrow("ROE", f"{float(roe_v):.1f}%")
+                        st.markdown(rows_html, unsafe_allow_html=True)
+                        if kis_income:
+                            st.caption("출처: KIS API (손익계산서 + 재무비율)")
+                        else:
+                            st.caption("출처: 금융위원회 공공데이터 (P1 export)")
+                    except Exception:
+                        st.caption("수치 계산 불가")
                 else:
-                    st.caption("재무 데이터 없음")
+                    st.caption("재무 데이터 없음 (P1 export 필요)")
 
         st.divider()
 
@@ -1103,7 +1060,7 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
                 _r1.success("✅ 외부감사 공시 없음 (최근 60일)")
                 _r2.success("✅ 상호변경: 확인불가 (P1 전용)")
         else:
-            st.caption("DART API 키 미설정 또는 공시 조회 불가")
+            st.caption("최근 60일 DART 공시 없음")
 
         st.divider()
 
@@ -1191,7 +1148,7 @@ def render_news(news_items):
 
 def main():
     st.title("📈 급등주 모멘텀 대시보드 (공개)")
-    st.caption("DART · yfinance · GitHub 공유데이터 (P1 실시간)")
+    st.caption("P1 수집 → GitHub JSON → P2 표시 (단방향 흐름)")
 
     for key, val in [("sel_ticker_surge", ""), ("sel_name_surge", ""),
                      ("sel_ticker_watch", ""), ("sel_name_watch", "")]:
@@ -1207,7 +1164,7 @@ def main():
     surge_items, theme_items = get_accumulated_news()
     theme_news    = surge_items + theme_items  # all items for 테마뉴스 탭
 
-    market_filter = render_sidebar({}, indices_p1, surge_items, theme_items)
+    market_filter = render_sidebar(indices_p1, surge_items, theme_items)
 
     tab1, tab2, tab3, tab4 = st.tabs(["🚀 급등주 랭킹", "⭐ 관심종목", "🔍 종목검색", "📰 테마뉴스"])
 
