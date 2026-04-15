@@ -991,12 +991,26 @@ def render_p1_table(surge_table, rsi_snapshot, watchlist=None, market_filter="�
         "리스크":  st.column_config.TextColumn(width="small"),
     }
 
-    # row height CSS 인젝션 — st.dataframe 내부 grid row를 P1 AgGrid(42px)와 동일하게
+    # row height + header CSS 인젝션 — P1 AgGrid 헤더(#1E2D4E) 동일하게
     st.markdown("""
         <style>
         div[data-testid="stDataFrame"] div[role="row"] { min-height:35px !important; max-height:35px !important; }
         div[data-testid="stDataFrame"] div[role="gridcell"] { padding-top:0 !important; padding-bottom:0 !important; font-size:12px !important; }
-        div[data-testid="stDataFrame"] div[role="columnheader"] { padding-top:0 !important; padding-bottom:0 !important; }
+        div[data-testid="stDataFrame"] div[role="columnheader"] {
+            background-color: #1E2D4E !important;
+            color: #E8ECF4 !important;
+            font-size: 13px !important;
+            font-weight: 700 !important;
+            letter-spacing: 0.3px !important;
+            padding: 4px 8px !important;
+            border-bottom: 2px solid #3A5080 !important;
+        }
+        div[data-testid="stDataFrame"] div[role="columnheader"] span {
+            color: #E8ECF4 !important;
+        }
+        div[data-testid="stDataFrame"] div[role="columnheader"] svg {
+            fill: #90CAF9 !important;
+        }
         </style>""", unsafe_allow_html=True)
 
     selected = st.dataframe(
