@@ -1583,6 +1583,7 @@ def main():
                   </span>
                 </div>""",
                 unsafe_allow_html=True)
+            st.markdown("<span style='font-size:0.8em;color:#888;'>&nbsp;🟦 KOSPI &nbsp; 🟧 KOSDAQ</span>", unsafe_allow_html=True)
             result = render_p1_table(_display_surge, rsi_snapshot, watchlist, market_filter)
             if result:
                 selected, df_p1 = result
