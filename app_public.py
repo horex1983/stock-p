@@ -615,7 +615,7 @@ def render_sidebar(indices_p1, surge_items, theme_items, indices_history=None):
             with col_s:
                 if "surge_day_idx" not in st.session_state:
                     st.session_state.surge_day_idx = 0
-                with st.popover("특징주", use_container_width=True, placement="bottom"):
+                with st.popover("특징주", use_container_width=True):
                     if surge_items:
                         c1, c2, c3 = st.columns([1, 4, 1])
                         cur = st.session_state.surge_day_idx
@@ -648,7 +648,7 @@ def render_sidebar(indices_p1, surge_items, theme_items, indices_history=None):
             with col_t:
                 if "theme_day_idx" not in st.session_state:
                     st.session_state.theme_day_idx = 0
-                with st.popover("특징테마", use_container_width=True, placement="bottom"):
+                with st.popover("특징테마", use_container_width=True):
                     if theme_items:
                         c1, c2, c3 = st.columns([1, 4, 1])
                         cur = st.session_state.theme_day_idx
@@ -683,7 +683,7 @@ def render_sidebar(indices_p1, surge_items, theme_items, indices_history=None):
                 unsafe_allow_html=True)
 
             # 테마 순위 TOP 5 팝오버
-            with st.popover("📊 테마 순위 TOP 5", use_container_width=True, placement="bottom"):
+            with st.popover("📊 테마 순위 TOP 5", use_container_width=True):
                 _top5 = top_kw[:5]
                 _medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
                 _max5 = _top5[0][1] if _top5 else 1
@@ -701,12 +701,12 @@ def render_sidebar(indices_p1, surge_items, theme_items, indices_history=None):
         st.markdown("### 🗓️ 휴장일", unsafe_allow_html=True)
         _hcol1, _hcol2 = st.columns(2)
         with _hcol1:
-            with st.popover("🇰🇷 국내", use_container_width=True, placement="bottom"):
+            with st.popover("🇰🇷 국내", use_container_width=True):
                 st.info("🇰🇷 **코스피/코스닥 휴장일**")
                 for h in _DOMESTIC_HOLIDAYS:
                     st.markdown(f"- **{h['date']}**: {h['reason']}")
         with _hcol2:
-            with st.popover("🇺🇸 미국", use_container_width=True, placement="bottom"):
+            with st.popover("🇺🇸 미국", use_container_width=True):
                 st.warning("🇺🇸 **NYSE/NASDAQ 미국휴장일**")
                 for h in _US_HOLIDAYS:
                     st.markdown(f"- **{h['date']}**: {h['reason']}")
@@ -1144,7 +1144,7 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
         # ② 팝업 버튼 2개 — P1 ui_detail.py와 동일한 로직
         _pc1, _pc2 = st.columns(2)
         with _pc1:
-            with st.popover("10초 재무 확인", use_container_width=True, placement="bottom"):
+            with st.popover("10초 재무 확인", use_container_width=True):
                 st.markdown("**🛡️ 재무 안정성 지표**")
                 # 유동비율 / 부채비율 (kis_stability)
                 crnt_rate = float(kis_stab.get("crnt_rate", 0) or 0)
@@ -1174,7 +1174,7 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
                     unsafe_allow_html=True)
 
         with _pc2:
-            with st.popover("핵심 투자 지표", use_container_width=True, placement="bottom"):
+            with st.popover("핵심 투자 지표", use_container_width=True):
                 st.markdown("**📌 성장 및 가치 지표**")
                 # P1과 동일: financial_ratio[0]에서 eps/bps/roe_val/bsop_prfi_inrt/grs
                 _eps_val = float(_latest_ratio.get("eps", 0) or 0)
