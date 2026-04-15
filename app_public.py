@@ -573,22 +573,6 @@ def render_sidebar(indices_p1, surge_items, theme_items, indices_history=None):
             _r2c1.markdown(_idx_card("NASDAQ", nd_c, nd_chg, "", "#2E7D32"), unsafe_allow_html=True)
             _r2c2.markdown(_idx_card("S&P500", sp_c, sp_chg, "", "#2E7D32"), unsafe_allow_html=True)
 
-            # ── 지수 미니차트 (최근 30거래일) ───────────────────────────────
-            if indices_history and len(indices_history) >= 2:
-                try:
-                    _hist_df = pd.DataFrame(reversed(indices_history))  # 오래된 것부터
-                    _hist_df["date"] = pd.to_datetime(_hist_df["date"], format="%Y%m%d")
-                    _hist_df = _hist_df.set_index("date")
-                    _cols_avail = [c for c in ["KOSPI", "KOSDAQ"] if c in _hist_df.columns]
-                    if _cols_avail:
-                        with st.expander("📈 지수 추이 (최근 30일)", expanded=False):
-                            st.line_chart(
-                                _hist_df[_cols_avail].dropna(),
-                                height=140,
-                                use_container_width=True,
-                            )
-                except Exception:
-                    pass
         else:
             pass
 
@@ -615,22 +599,6 @@ def render_sidebar(indices_p1, surge_items, theme_items, indices_history=None):
                 f"<div style='display:flex;align-items:baseline;gap:10px;'>"
                 f"<span style='font-size:1.25em;font-weight:700;color:#1a1a1a;'>{_nf['price']:.2f}pt</span>"
                 f"<span style='font-size:1.1em;font-weight:700;color:{_pct_color};'>{_arrow}{abs(_pct):.2f}%</span>"
-                f"</div></div>",
-                unsafe_allow_html=True)
-
-        # ── 시장 폭 ──────────────────────────────────────────────────────────
-        breadth = get_market_breadth()
-        if breadth:
-            up   = breadth.get("상승", 0)
-            dn   = breadth.get("하락", 0)
-            flat = breadth.get("보합", 0)
-            st.markdown(
-                f"<div class='metric-card'>"
-                f"<div class='metric-label'>시장 폭 (전체 종목)</div>"
-                f"<div class='metric-value' style='font-size:0.95em'>"
-                f"<span class='up'>▲ {up}</span> &nbsp;"
-                f"<span class='down'>▼ {dn}</span> &nbsp;"
-                f"<span style='color:#8b949e'>― {flat}</span>"
                 f"</div></div>",
                 unsafe_allow_html=True)
 
