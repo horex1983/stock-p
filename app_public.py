@@ -787,12 +787,6 @@ def render_p1_table(surge_table, rsi_snapshot, watchlist=None, market_filter="�
     if market_filter != "전체":
         df = df[df["시장"] == market_filter]
 
-    search = st.text_input("🔍 종목 검색", placeholder="종목명 또는 코드 입력",
-                            label_visibility="collapsed")
-    if search:
-        mask = (df["종목명"].str.contains(search, na=False) |
-                df["종목코드"].str.contains(search, na=False))
-        df = df[mask]
 
     # 숫자 컬럼 numeric 보장
     for col in ["현재가", "당일등락", "7일누적", "거래대금"]:
