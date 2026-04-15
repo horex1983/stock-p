@@ -1322,11 +1322,10 @@ def main():
     cb_overhang   = get_cb_overhang()
     watchlist     = get_watchlist()
     surge_items, theme_items = get_accumulated_news()
-    theme_news    = surge_items + theme_items  # all items for 테마뉴스 탭
 
     market_filter = render_sidebar(indices_p1, surge_items, theme_items)
 
-    tab1, tab2, tab3, tab4 = st.tabs(["🚀 급등주 랭킹", "⭐ 관심종목", "🔍 종목검색", "📰 테마뉴스"])
+    tab1, tab2, tab3 = st.tabs(["🚀 급등주 랭킹", "⭐ 관심종목", "🔍 종목검색"])
 
     with tab1:
         if surge_table:
@@ -1356,10 +1355,29 @@ def main():
                     row = df_p1.iloc[rows[0]]
                     st.session_state.sel_ticker_surge = str(row["종목코드"]).zfill(6)
                     st.session_state.sel_name_surge   = row["종목명"]
-                if st.session_state.sel_ticker_surge:
-                    render_detail(st.session_state.sel_ticker_surge,
-                                  st.session_state.sel_name_surge,
-                                  rsi_snapshot, cb_overhang, surge_reasons)
+
+            # ── 관심종목 토글 버튼 (종목 선택 시 표시) ──────────────────────
+            _stk = st.session_state.sel_ticker_surge
+            _snm = st.session_state.sel_name_surge
+            if _stk:
+                _wl_set   = set(str(c).zfill(6) for c in watchlist)
+                _in_wl    = _stk in _wl_set
+                _btn_lbl  = f"★ 관심 해제  [{_snm}]" if _in_wl else f"☆ 관심 추가  [{_snm}]"
+                _btn_type = "secondary" if _in_wl else "primary"
+                if st.button(_btn_lbl, type=_btn_type, key="wl_toggle_surge"):
+                    _wl_list = list(watchlist)
+                    if _in_wl:
+                        _wl_list = [c for c in _wl_list if str(c).zfill(6) != _stk]
+                    else:
+                        _wl_list.append(_stk)
+                    if _github_put("data/watchlist.json",
+                                   json.dumps(_wl_list, ensure_ascii=False)):
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.error("GitHub 업로드 실패")
+
+                render_detail(_stk, _snm, rsi_snapshot, cb_overhang, surge_reasons)
         else:
             pass
 
@@ -1459,10 +1477,6 @@ def main():
                                   st.session_state.sel_name_surge,
                                   rsi_snapshot, cb_overhang, surge_reasons)
 
-    with tab4:
-        st.markdown("<div class='section-title'>📰 테마뉴스 (infostock 수집)</div>",
-                    unsafe_allow_html=True)
-        render_news(theme_news)
 
 
 if __name__ == "__main__":
