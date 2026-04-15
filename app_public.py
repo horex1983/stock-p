@@ -779,6 +779,20 @@ def render_p1_table(surge_table, rsi_snapshot, watchlist=None, market_filter="�
     if "tier" in df.columns:
         df = df.rename(columns={"tier": "등급"})
 
+    # 등급 표시값을 "(점수) 뱃지" 형태로 변환 → 알파벳 정렬 = 점수 내림차순
+    # 예: "👑 S (100)" → "(100) 👑S",  "🟡 B (52)" → "(052) 🟡B"
+    import re as _re
+    def _fmt_tier(v):
+        s = str(v)
+        m = _re.search(r'(\d+)', s)
+        score = int(m.group(1)) if m else 0
+        for badge, letter in [("👑", "S"), ("🟢", "A"), ("🟡", "B"), ("🟠", "C"), ("🔴", "D")]:
+            if letter in s:
+                return f"({score:03d}) {badge}{letter}"
+        return s
+    if "등급" in df.columns:
+        df["등급"] = df["등급"].apply(_fmt_tier)
+
     # 관심종목 마커
     _wl = set(str(c).zfill(6) for c in (watchlist or []))
     df["★"] = df["종목코드"].apply(lambda c: "★" if str(c).zfill(6) in _wl else "")
@@ -857,20 +871,16 @@ def render_p1_table(surge_table, rsi_snapshot, watchlist=None, market_filter="�
         return styles
 
     # ── Styler: 등급 배경 (axis=0, subset) ────────────────────────────
-    _tier_bg = {
-        "👑S": "#FFF9C4", "🟢A": "#E8F5E9", "🟡B": "#FFF8E1",
-        "🟠C": "#FFF3E0", "🔴D": "#FFEBEE",
-    }
-    _tier_color = {
-        "👑S": "#B8860B", "🟢A": "#2E7D32", "🟡B": "#F57F17",
-        "🟠C": "#E65100", "🔴D": "#C62828",
-    }
     def _tier_style(col_series):
+        # 새 포맷: "(100) 👑S" — 뱃지 문자로 키 매칭
+        _letter_bg    = {"S": "#FFF9C4", "A": "#E8F5E9", "B": "#FFF8E1", "C": "#FFF3E0", "D": "#FFEBEE"}
+        _letter_color = {"S": "#B8860B", "A": "#2E7D32", "B": "#F57F17", "C": "#E65100", "D": "#C62828"}
         styles = []
         for v in col_series:
             s = str(v)
-            bg = _tier_bg.get(s, "")
-            fg = _tier_color.get(s, "#333")
+            letter = next((l for l in ("S", "A", "B", "C", "D") if l in s), None)
+            bg = _letter_bg.get(letter, "")
+            fg = _letter_color.get(letter, "#333")
             if bg:
                 styles.append(f"background-color:{bg};color:{fg};font-weight:700;font-size:11px;text-align:center;border-radius:3px")
             else:
