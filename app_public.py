@@ -1162,48 +1162,48 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
         st.divider()
 
         # ⑤ 감사보고서 / 상호변경
-        with st.container(border=True):
-            st.markdown("#### 📋 감사보고서 / 상호변경")
-            gov = corp.get("gov_risk", {}) if isinstance(corp.get("gov_risk"), dict) else {}
+        st.markdown("#### 📋 감사보고서 / 상호변경")
+        _gov = corp.get("gov_risk") if isinstance(corp.get("gov_risk"), dict) else None
+        if _gov:
+            _bad_audit        = _gov.get("bad_audit", False)
+            _audit_details    = _gov.get("audit_details", "확인 불가")
+            _name_change_cnt  = _gov.get("name_change_count", 0)
+            _audit_rcept_no   = _gov.get("audit_rcept_no", "")
+            _gc1              = _gov.get("gc1", False)
+            _gc2              = _gov.get("gc2", False)
+            _ic               = _gov.get("ic", False)
 
-            _gc1, _gc2 = st.columns(2)
-
-            # 감사의견
-            with _gc1:
-                if gov:
-                    _bad   = gov.get("bad_audit", False)
-                    _gc    = gov.get("going_concern", False)
-                    _adet  = gov.get("audit_details", "")
-                    _arno  = gov.get("audit_rcept_no", "")
-                    if _bad:
-                        st.error(f"🚨 비적정 감사의견 — {_adet}")
-                    elif _gc:
-                        st.warning(f"⚠️ 계속기업 불확실 — {_adet}")
-                    else:
-                        st.success(f"✅ 감사의견 정상 — {_adet}")
-                    if _arno:
-                        _dart_url = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={_arno}"
-                        st.markdown(f"[📄 감사보고서 원문 보기]({_dart_url})")
+            # Row 1: 감사의견 | 계속기업 존속불확실성 사유
+            _r1c1, _r1c2 = st.columns(2)
+            if not _bad_audit:
+                _r1c1.success(f"✅ 감사의견: {_audit_details}")
+            else:
+                _r1c1.error(f"🚨 감사의견: {_audit_details}")
+                if _audit_rcept_no:
+                    _r1c1.link_button(
+                        "📄 DART 감사보고서 열람",
+                        f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={_audit_rcept_no}")
                 else:
-                    # fallback: DART 공시에서 외부감사 항목 확인
-                    _dart_all  = get_dart(ticker)
-                    _audit_it  = [d for d in _dart_all if d.get("pblntf_ty","") == "F"]
-                    if _audit_it:
-                        st.warning(f"⚠️ 외부감사 공시 {len(_audit_it)}건 (P1 미수집)")
-                    else:
-                        st.info("ℹ️ 감사의견 미수집 (P1 상세보기 후 갱신)")
+                    _r1c1.caption("감사보고서 접수번호를 DART에서 찾을 수 없습니다.")
+            (_r1c2.warning("⚠️ 계속기업 존속불확실성 사유 : 해당")
+             if _gc1 else _r1c2.success("✅ 계속기업 존속불확실성 사유 : 미해당"))
 
-            # 상호변경
-            with _gc2:
-                if gov:
-                    _nc   = gov.get("name_change_count", 0)
-                    _past = gov.get("past_names", "")
-                    if _nc and _nc > 0:
-                        st.warning(f"⚠️ 상호변경 {_nc}회 — 前: {_past}")
-                    else:
-                        st.success("✅ 상호변경 이력 없음")
-                else:
-                    st.info("ℹ️ 상호변경 이력 미수집")
+            # Row 2: 감사 외 계속기업 | 내부회계관리제도
+            _r2c1, _r2c2 = st.columns(2)
+            (_r2c1.warning("⚠️ 감사 외 계속기업 존속불확실성 : 기재")
+             if _gc2 else _r2c1.success("✅ 감사 외 계속기업 존속불확실성 : 미기재"))
+            (_r2c2.warning("⚠️ 내부회계관리제도 감사의견 : 해당")
+             if _ic  else _r2c2.success("✅ 내부회계관리제도 감사의견 : 미해당"))
+
+            # Row 3: 상호변경
+            _r3c1, _ = st.columns(2)
+            if _name_change_cnt == 0:
+                _r3c1.success("✅ 상호변경: 없음")
+            else:
+                _past = _gov.get("past_names", "")
+                _r3c1.warning(f"⚠️ 상호변경: {_name_change_cnt}회 ({_past})")
+        else:
+            st.info("ℹ️ 감사/상호변경 데이터 미수집 — Full Export 후 표시됩니다.")
 
         st.divider()
 
