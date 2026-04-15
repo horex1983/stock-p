@@ -460,7 +460,7 @@ def render_chart(ticker, name):
         xaxis_rangeslider_visible=False, legend=dict(orientation="h", y=1.08, x=0))
     fig.update_yaxes(gridcolor="#eeeeee")
     fig.update_xaxes(gridcolor="#eeeeee")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=f"chart_{ticker}")
 
 
 @st.cache_data(ttl=300)
