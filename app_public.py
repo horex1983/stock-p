@@ -1185,15 +1185,21 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
                         f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={_audit_rcept_no}")
                 else:
                     _r1c1.caption("감사보고서 접수번호를 DART에서 찾을 수 없습니다.")
-            (_r1c2.warning("⚠️ 계속기업 존속불확실성 사유 : 해당")
-             if _gc1 else _r1c2.success("✅ 계속기업 존속불확실성 사유 : 미해당"))
+            if _gc1:
+                _r1c2.warning("⚠️ 계속기업 존속불확실성 사유 : 해당")
+            else:
+                _r1c2.success("✅ 계속기업 존속불확실성 사유 : 미해당")
 
             # Row 2: 감사 외 계속기업 | 내부회계관리제도
             _r2c1, _r2c2 = st.columns(2)
-            (_r2c1.warning("⚠️ 감사 외 계속기업 존속불확실성 : 기재")
-             if _gc2 else _r2c1.success("✅ 감사 외 계속기업 존속불확실성 : 미기재"))
-            (_r2c2.warning("⚠️ 내부회계관리제도 감사의견 : 해당")
-             if _ic  else _r2c2.success("✅ 내부회계관리제도 감사의견 : 미해당"))
+            if _gc2:
+                _r2c1.warning("⚠️ 감사 외 계속기업 존속불확실성 : 기재")
+            else:
+                _r2c1.success("✅ 감사 외 계속기업 존속불확실성 : 미기재")
+            if _ic:
+                _r2c2.warning("⚠️ 내부회계관리제도 감사의견 : 해당")
+            else:
+                _r2c2.success("✅ 내부회계관리제도 감사의견 : 미해당")
 
             # Row 3: 상호변경
             _r3c1, _ = st.columns(2)
