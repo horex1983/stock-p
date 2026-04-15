@@ -938,7 +938,17 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
 
     outline     = corp.get("outline", {})
     # KIS 재무 데이터 우선, 없으면 공공데이터 fallback
-    kis_ratio   = corp.get("kis_fin_ratio", {})   or {}
+    # kis_fin_ratio: 5년치 list (PER 밴드 계산용) — 팝오버에는 [0]만 사용
+    _kis_ratio_raw = corp.get("kis_fin_ratio", [])
+    if isinstance(_kis_ratio_raw, list):
+        kis_ratio    = _kis_ratio_raw                          # valuation용 list
+        _latest_ratio = _kis_ratio_raw[0] if _kis_ratio_raw else {}
+    elif isinstance(_kis_ratio_raw, dict) and _kis_ratio_raw:
+        kis_ratio    = [_kis_ratio_raw]
+        _latest_ratio = _kis_ratio_raw
+    else:
+        kis_ratio    = []
+        _latest_ratio = {}
     kis_stab    = corp.get("kis_stability", {})   or {}
     kis_income  = corp.get("kis_income", {})      or {}
     kis_basic   = corp.get("kis_basic", {})       or {}
@@ -1009,10 +1019,10 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
                         cap_str = "완전잠식" if tc<=0 else "정상"
                         cap_b   = _badge(cap_str, "bad" if tc<=0 else "good")
                     except: cap_str = "-"; cap_b = _badge("N/A","neutral")
-                    # 총자산/총부채 (공공데이터 우선, KIS balance_sheet fallback)
-                    try: tast_s = f"{float(fin_pub.get('enpTastAmt','') or 0)/1e6:,.0f}억"
+                    # 총자산/총부채 (공공데이터 원 단위 → /1e8 = 억원)
+                    try: tast_s = f"{float(fin_pub.get('enpTastAmt','') or 0)/1e8:,.0f}억"
                     except: tast_s = "-"
-                    try: tdbt_s = f"{float(fin_pub.get('enpTdbtAmt','') or 0)/1e6:,.0f}억"
+                    try: tdbt_s = f"{float(fin_pub.get('enpTdbtAmt','') or 0)/1e8:,.0f}억"
                     except: tdbt_s = "-"
                     rows_html = (
                         _mrow("부채비율", f"{dr:.1f}%" if dr is not None else "-", dr_b) +
@@ -1034,37 +1044,52 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
         with _pc2:
             with st.popover("핵심 투자지표", use_container_width=True):
                 st.markdown("**📌 성장 및 수익성 지표**")
-                _has_income = bool(kis_income or fin_pub)
+                _has_income = bool(_latest_ratio or fin_pub)
                 if _has_income:
                     try:
-                        # 매출액: KIS income_statement > 공공데이터
-                        s_v = float(kis_income.get("sale_account","") or fin_pub.get("enpSaleAmt","") or 0)
-                        o_v = float(kis_income.get("bsop_prti","")    or fin_pub.get("enpBzopPft","") or 0)
-                        n_v = float(kis_income.get("thtr_ntin","")    or fin_pub.get("enpCrtmNpf","") or 0)
+                        # 절대값: 공공데이터(원 단위) → /1e8 = 억원
+                        s_v = float(fin_pub.get("enpSaleAmt","") or 0)
+                        o_v = float(fin_pub.get("enpBzopPft","") or 0)
+                        n_v = float(fin_pub.get("enpCrtmNpf","") or 0)
                         opm = o_v/s_v*100 if s_v else 0
                         npm = n_v/s_v*100 if s_v else 0
-                        # PER/PBR/ROE (KIS 재무비율)
-                        per_v  = kis_ratio.get("per","")
-                        pbr_v  = kis_ratio.get("pbr","")
-                        roe_v  = kis_ratio.get("roe_val","")
-                        rows_html = (
-                            _mrow("매출액", f"{s_v/1e8:,.0f}억") +
-                            _mrow("영업이익", f"{o_v/1e8:,.0f}억",
-                                  _badge("흑자","good") if o_v>=0 else _badge("적자","bad")) +
-                            _mrow("영업이익률", f"{opm:.1f}%",
-                                  _badge("양호","good") if opm>=10 else (_badge("보통","neutral") if opm>=0 else _badge("위험","bad"))) +
-                            _mrow("순이익", f"{n_v/1e8:,.0f}억") +
-                            _mrow("순이익률", f"{npm:.1f}%",
-                                  _badge("양호","good") if npm>=5 else (_badge("보통","neutral") if npm>=0 else _badge("위험","bad")))
-                        )
-                        if per_v: rows_html += _mrow("PER", f"{float(per_v):.1f}배")
-                        if pbr_v: rows_html += _mrow("PBR", f"{float(pbr_v):.1f}배")
-                        if roe_v: rows_html += _mrow("ROE", f"{float(roe_v):.1f}%")
-                        st.markdown(rows_html, unsafe_allow_html=True)
-                        if kis_income:
-                            st.caption("출처: KIS API (손익계산서 + 재무비율)")
+                        # 비율 지표: KIS 재무비율 API (financial_ratio[0])
+                        roe_v  = _latest_ratio.get("roe_val", "")
+                        grs_v  = _latest_ratio.get("grs", "")        # 매출액증가율(%)
+                        per_v  = _latest_ratio.get("per", "")
+                        pbr_v  = _latest_ratio.get("pbr", "")
+                        eps_v  = _latest_ratio.get("eps", "")
+                        rows_html = ""
+                        if s_v:
+                            rows_html += (
+                                _mrow("매출액", f"{s_v/1e8:,.0f}억") +
+                                _mrow("영업이익", f"{o_v/1e8:,.0f}억",
+                                      _badge("흑자","good") if o_v>=0 else _badge("적자","bad")) +
+                                _mrow("영업이익률", f"{opm:.1f}%",
+                                      _badge("양호","good") if opm>=10 else (_badge("보통","neutral") if opm>=0 else _badge("위험","bad"))) +
+                                _mrow("순이익", f"{n_v/1e8:,.0f}억") +
+                                _mrow("순이익률", f"{npm:.1f}%",
+                                      _badge("양호","good") if npm>=5 else (_badge("보통","neutral") if npm>=0 else _badge("위험","bad")))
+                            )
+                        try:
+                            if grs_v: rows_html += _mrow("매출성장률", f"{float(grs_v):.1f}%",
+                                _badge("성장","good") if float(grs_v)>=10 else (_badge("보통","neutral") if float(grs_v)>=0 else _badge("역성장","bad")))
+                            if roe_v: rows_html += _mrow("ROE", f"{float(roe_v):.1f}%",
+                                _badge("우수","good") if float(roe_v)>=15 else (_badge("양호","neutral") if float(roe_v)>=8 else _badge("미흡","bad")))
+                            if per_v: rows_html += _mrow("PER", f"{float(per_v):.1f}배")
+                            if pbr_v: rows_html += _mrow("PBR", f"{float(pbr_v):.1f}배")
+                            if eps_v: rows_html += _mrow("EPS", f"{int(float(eps_v)):,}원",
+                                _badge("흑자","good") if float(eps_v)>0 else _badge("적자","bad"))
+                        except Exception:
+                            pass
+                        if rows_html:
+                            st.markdown(rows_html, unsafe_allow_html=True)
+                            _src = []
+                            if s_v: _src.append("금융위(공공데이터)")
+                            if _latest_ratio: _src.append("KIS 재무비율")
+                            st.caption(f"출처: {' + '.join(_src)}")
                         else:
-                            st.caption("출처: 금융위원회 공공데이터 (P1 export)")
+                            st.caption("재무 데이터 없음 (P1 export 필요)")
                     except Exception:
                         st.caption("수치 계산 불가")
                 else:
