@@ -1213,30 +1213,97 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
 
         st.divider()
 
-        # ⑥ 밸류에이션 — 6개월 고저 위치 (P1 PER 밴드는 5년 데이터 export 후 구현 예정)
-        st.markdown("#### 📈 밸류에이션")
+        # ⑥ 밸류에이션 (Audited PER Band) — P1 ui_detail.py 동일 알고리즘
+        st.markdown("#### 📈 밸류에이션 (Audited)")
         with st.container(border=True):
-            if not ohlcv.empty:
-                try:
-                    hi_6m = float(ohlcv["High"].max())
-                    lo_6m = float(ohlcv["Low"].min())
-                    pos   = (cur_price - lo_6m) / (hi_6m - lo_6m) * 100 if hi_6m != lo_6m else 0
-                    if pos >= 70:
-                        st.warning(f"⚠️ **고점권 주의** (매수 유의) — 6개월 고저 대비 현재 위치 {pos:.0f}%")
-                    elif pos <= 30:
-                        st.success(f"🛡️ **저점권** (매수 유리) — 6개월 고저 대비 현재 위치 {pos:.0f}%")
-                    else:
-                        st.info(f"✅ **중립권** (보유/관찰) — 6개월 고저 대비 현재 위치 {pos:.0f}%")
-                    st.progress(max(0, min(100, int(pos))), text=f"현재 주가 위치 ({pos:.0f}%)")
-                    st.markdown(
-                        f"**6개월 고가:** {int(hi_6m):,}원 &nbsp;&nbsp;|&nbsp;&nbsp; **6개월 저가:** {int(lo_6m):,}원",
-                        unsafe_allow_html=True)
-                    st.caption("※ PER 밴드(5년 역사적 밸류에이션)는 추후 구현 예정입니다.")
-                except Exception:
-                    st.caption("위치 계산 불가")
+            # kis_fin_ratio: 5년치 리스트 (export_to_github Full Export 기준)
+            _fin_list = kis_ratio if isinstance(kis_ratio, list) else (
+                        [kis_ratio] if isinstance(kis_ratio, dict) and kis_ratio else [])
+
+            _latest_fin  = _fin_list[0] if _fin_list else {}
+            _eps_base    = 0.0
+            try: _eps_base = float(_latest_fin.get("eps", 0) or 0)
+            except Exception: pass
+
+            # 연도별 PER 밴드 계산
+            _year_bands = []
+            if _eps_base > 0 and not ohlcv.empty:
+                for _vr in _fin_list[:5]:
+                    try:
+                        _veps = float(_vr.get("eps", 0) or 0)
+                        _vym  = str(_vr.get("stac_yymm", ""))
+                        if _veps <= 0 or len(_vym) < 6:
+                            continue
+                        _vyear = int(_vym[:4])
+                        _vmon  = int(_vym[4:6])
+                        _vys   = pd.Timestamp(year=_vyear, month=1, day=1)
+                        _vye   = (pd.Timestamp(year=_vyear, month=_vmon, day=1)
+                                  + pd.offsets.MonthEnd(0))
+                        _vslice = ohlcv[(ohlcv.index >= _vys) & (ohlcv.index <= _vye)]
+                        if _vslice.empty:
+                            continue
+                        _vph = float(_vslice["High"].max()) / _veps
+                        _vpl = float(_vslice["Low"].min())  / _veps
+                        if 0 < _vpl < _vph < 500:
+                            _year_bands.append({
+                                "year": _vyear, "per_h": _vph, "per_l": _vpl,
+                                "year_h": float(_vslice["High"].max()),
+                                "year_l": float(_vslice["Low"].min()),
+                            })
+                    except Exception:
+                        continue
+
+            # 중앙값 PER 기반 밴드 산출
+            _val_ok = False
+            h_band = l_band = 0.0
+            _med_ph = _med_pl = 0.0
+            _used_years = []
+            if _eps_base > 0 and _year_bands:
+                _sph = sorted(b["per_h"] for b in _year_bands)
+                _spl = sorted(b["per_l"] for b in _year_bands)
+                _n   = len(_sph)
+                _med_ph = (_sph[_n//2] if _n % 2 == 1
+                           else (_sph[_n//2-1] + _sph[_n//2]) / 2)
+                _med_pl = (_spl[_n//2] if _n % 2 == 1
+                           else (_spl[_n//2-1] + _spl[_n//2]) / 2)
+                h_band = _eps_base * _med_ph
+                l_band = _eps_base * _med_pl
+                _used_years = [str(b["year"]) for b in _year_bands]
+                _val_ok = True
+
+            # 렌더링
+            if _val_ok:
+                if cur_price < l_band:
+                    st.success(f"🛡️ **강력 저평가** (매수 유리) — 현재가가 밴드 하단({int(l_band):,}원) 아래입니다.")
+                elif l_band <= cur_price <= h_band:
+                    st.info(f"✅ **적정 주가** (보유/관찰) — 주가가 역사적 밴드({int(l_band):,} ~ {int(h_band):,}원) 내에 있습니다.")
+                else:
+                    st.warning(f"⚠️ **고평가 주의** — 현재가가 밴드 상단({int(h_band):,}원) 위에 있습니다.")
+                if h_band > l_band:
+                    _pos = (cur_price - l_band) / (h_band - l_band) * 100
+                    st.progress(max(0, min(100, int(_pos))),
+                                text=f"현재 주가 위치 ({int(_pos)}%)")
+                st.markdown(
+                    f"**Max Value:** {int(h_band):,}원 &nbsp;&nbsp;|&nbsp;&nbsp; **Min Value:** {int(l_band):,}원",
+                    unsafe_allow_html=True)
+                with st.expander(f"📊 연도별 PER 밴드 상세 ({', '.join(_used_years)})"):
+                    _rows_val = []
+                    for _b in _year_bands:
+                        _rows_val.append({
+                            "기준연도":        str(_b["year"]),
+                            "고가PER":        f"{_b['per_h']:.1f}배",
+                            "저가PER":        f"{_b['per_l']:.1f}배",
+                            "현EPS 적용 상단": f"{int(_eps_base * _b['per_h']):,}원",
+                            "현EPS 적용 하단": f"{int(_eps_base * _b['per_l']):,}원",
+                        })
+                    st.dataframe(pd.DataFrame(_rows_val),
+                                 use_container_width=True, hide_index=True)
+                    st.caption(
+                        f"※ 중앙값 PER 사용: 고가PER {_med_ph:.1f}배 / "
+                        f"저가PER {_med_pl:.1f}배 × 최신 EPS {int(_eps_base):,}원")
             else:
                 st.error("🚨 이익 적자: 가치 산출 불가 (Valuation Skip)")
-                st.caption("💡 차트 데이터 없음 — 밸류에이션 계산 불가")
+                st.caption("💡 본 종목은 현재 적자 상태이거나 유의미한 이익 데이터를 공시하지 않았습니다.")
 
     # ════════════════════════════════════════════════════════════════════════
     # 오른쪽: 캔들 차트
