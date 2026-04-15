@@ -456,7 +456,7 @@ def render_chart(ticker, name):
                   row=2, col=1)
     fig.update_layout(
         template="plotly_white", height=550, margin=dict(l=10, r=10, t=30, b=10),
-        title=dict(text=f"{name} ({ticker}) - 6개월", font=dict(size=13), x=0),
+        title=dict(text=f"{name} ({ticker}) - 3개월", font=dict(size=13), x=0),
         xaxis_rangeslider_visible=False, legend=dict(orientation="h", y=1.08, x=0))
     fig.update_yaxes(gridcolor="#eeeeee")
     fig.update_xaxes(gridcolor="#eeeeee")
