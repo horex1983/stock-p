@@ -1576,7 +1576,7 @@ def main():
                     padding:8px 16px; margin-bottom:6px;
                     display:flex; align-items:center; justify-content:space-between;'>
                   <span style='color:#E8EDF3;font-size:1.0em;font-weight:700;letter-spacing:0.5px;'>
-                    🚀&nbsp;급등주 랭킹 — {_display_label}
+                    🚀&nbsp;급등주 랭킹
                   </span>
                   <span style='color:#90CAF9;font-size:0.8em;'>
                     {_cnt}종목&nbsp;&nbsp;|&nbsp;&nbsp;업데이트&nbsp;{_upd}
