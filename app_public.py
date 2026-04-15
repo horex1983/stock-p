@@ -1213,50 +1213,30 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
 
         st.divider()
 
-        # ⑥ 밸류에이션
+        # ⑥ 밸류에이션 — 6개월 고저 위치 (P1 PER 밴드는 5년 데이터 export 후 구현 예정)
         st.markdown("#### 📈 밸류에이션")
         with st.container(border=True):
-            # KIS 재무비율 (PER/PBR/ROE)
-            _v1, _v2 = st.columns([1, 1])
-            with _v1:
-                _per = kis_ratio.get("per", "") or kis_ratio.get("PER", "")
-                _pbr = kis_ratio.get("pbr", "") or kis_ratio.get("PBR", "")
-                _roe = kis_ratio.get("roe_val", "") or kis_ratio.get("ROE", "")
-                _eps = kis_ratio.get("eps", "") or kis_ratio.get("EPS", "")
-                _has_kis = any([_per, _pbr, _roe, _eps])
-                if _has_kis:
-                    def _fv(v, suffix="배"):
-                        try: return f"{float(v):.1f}{suffix}"
-                        except: return str(v) if v else "-"
+            if not ohlcv.empty:
+                try:
+                    hi_6m = float(ohlcv["High"].max())
+                    lo_6m = float(ohlcv["Low"].min())
+                    pos   = (cur_price - lo_6m) / (hi_6m - lo_6m) * 100 if hi_6m != lo_6m else 0
+                    if pos >= 70:
+                        st.warning(f"⚠️ **고점권 주의** (매수 유의) — 6개월 고저 대비 현재 위치 {pos:.0f}%")
+                    elif pos <= 30:
+                        st.success(f"🛡️ **저점권** (매수 유리) — 6개월 고저 대비 현재 위치 {pos:.0f}%")
+                    else:
+                        st.info(f"✅ **중립권** (보유/관찰) — 6개월 고저 대비 현재 위치 {pos:.0f}%")
+                    st.progress(max(0, min(100, int(pos))), text=f"현재 주가 위치 ({pos:.0f}%)")
                     st.markdown(
-                        f"| 지표 | 값 |\n|---|---|\n"
-                        f"| PER | {_fv(_per)} |\n"
-                        f"| PBR | {_fv(_pbr)} |\n"
-                        f"| ROE | {_fv(_roe, '%')} |\n"
-                        f"| EPS | {_fv(_eps, '원')} |",
-                        unsafe_allow_html=False)
-                else:
-                    st.caption("KIS 재무비율 미수집")
-
-            with _v2:
-                if not ohlcv.empty:
-                    try:
-                        hi_6m = float(ohlcv["High"].max())
-                        lo_6m = float(ohlcv["Low"].min())
-                        pos   = (cur_price - lo_6m) / (hi_6m - lo_6m) * 100 if hi_6m != lo_6m else 0
-                        if pos >= 70:
-                            st.warning(f"⚠️ **고점권** — 6개월 위치 {pos:.0f}%")
-                        elif pos <= 30:
-                            st.success(f"🛡️ **저점권** — 6개월 위치 {pos:.0f}%")
-                        else:
-                            st.info(f"✅ **중립권** — 6개월 위치 {pos:.0f}%")
-                        st.progress(max(0, min(100, int(pos))),
-                                    text=f"주가 위치 {pos:.0f}%")
-                        st.caption(f"고가 {int(hi_6m):,}원  |  저가 {int(lo_6m):,}원")
-                    except:
-                        st.caption("위치 계산 불가")
-                else:
-                    st.caption("OHLCV 데이터 없음")
+                        f"**6개월 고가:** {int(hi_6m):,}원 &nbsp;&nbsp;|&nbsp;&nbsp; **6개월 저가:** {int(lo_6m):,}원",
+                        unsafe_allow_html=True)
+                    st.caption("※ PER 밴드(5년 역사적 밸류에이션)는 추후 구현 예정입니다.")
+                except Exception:
+                    st.caption("위치 계산 불가")
+            else:
+                st.error("🚨 이익 적자: 가치 산출 불가 (Valuation Skip)")
+                st.caption("💡 차트 데이터 없음 — 밸류에이션 계산 불가")
 
     # ════════════════════════════════════════════════════════════════════════
     # 오른쪽: 캔들 차트
