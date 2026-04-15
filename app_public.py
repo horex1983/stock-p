@@ -52,6 +52,20 @@ import pathlib as _pathlib
 _CACHE_DIR = _pathlib.Path("/tmp/p2_cache")
 _CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
+
+def _period_contains_today(period_str: str) -> bool:
+    """'YYYY.MM.DD ~ YYYY.MM.DD' 형식에서 오늘 포함 여부 (P1 app_utils 동일 로직)"""
+    if not period_str:
+        return False
+    m = re.findall(r'(\d{4})[.\-](\d{2})[.\-](\d{2})', period_str)
+    if len(m) < 2:
+        return False
+    _today_iso = datetime.now().date().isoformat()
+    s = f"{m[0][0]}-{m[0][1]}-{m[0][2]}"
+    e = f"{m[1][0]}-{m[1][1]}-{m[1][2]}"
+    return s <= _today_iso <= e
+
+
 @st.cache_data(ttl=300)
 def _github_json(path):
     _file = _CACHE_DIR / path.replace("/", "__")
@@ -63,7 +77,19 @@ def _github_json(path):
                          "Accept": "application/vnd.github+json"},
                 params={"ref": GITHUB_BRANCH}, timeout=10)
             if r.status_code == 200:
-                data = json.loads(base64.b64decode(r.json()["content"]).decode())
+                meta = r.json()
+                raw_content = meta.get("content")
+                if raw_content:
+                    # normal path: content base64-encoded (<1 MB)
+                    data = json.loads(base64.b64decode(raw_content).decode())
+                else:
+                    # file >1 MB: GitHub omits content, use download_url (raw)
+                    dl_url = meta.get("download_url")
+                    if not dl_url:
+                        raise ValueError("no content and no download_url")
+                    r2 = requests.get(dl_url, timeout=30)
+                    r2.raise_for_status()
+                    data = r2.json()
                 _file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
                 return data
         except: pass
@@ -565,6 +591,32 @@ def render_sidebar(indices_p1, surge_items, theme_items, indices_history=None):
                     pass
         else:
             pass
+
+        # ── K200 야간선물 (전체 너비) ─────────────────────────────────────────
+        _nf = indices_p1.get("night_futures", {}) if isinstance(indices_p1, dict) else {}
+        if _nf and _nf.get("price") is not None:
+            _sign   = _nf.get("sign", "3")
+            _arrow  = "▲" if _sign in ("1", "2") else ("▼" if _sign in ("4", "5") else "")
+            _pct    = _nf.get("change_pct", 0)
+            _pct_color = "#c62828" if _sign in ("1", "2") else ("#1565c0" if _sign in ("4", "5") else "#555")
+            _api_name  = _nf.get("name", "")
+            if _nf.get("is_ls_futures"):
+                _label = f"{_api_name} 🌙" if _api_name else "KRX 야간선물 🌙"
+            elif _nf.get("is_night"):
+                _label = f"{_api_name} 🌙" if _api_name else "K200 야간선물 🌙"
+            elif _nf.get("is_index_fallback"):
+                _label = "KOSPI200 지수 (야간선물 거래없음)"
+            else:
+                _label = "K200 선물(전일)"
+            st.markdown(
+                f"<div style='border-left:3px solid #F9A825;background:#FAFBFD;"
+                f"border-radius:0 8px 8px 0;padding:8px 10px;margin-bottom:6px;'>"
+                f"<div style='font-size:0.75em;font-weight:700;color:#888;letter-spacing:0.5px;'>{_label}</div>"
+                f"<div style='display:flex;align-items:baseline;gap:10px;'>"
+                f"<span style='font-size:1.25em;font-weight:700;color:#1a1a1a;'>{_nf['price']:.2f}pt</span>"
+                f"<span style='font-size:1.1em;font-weight:700;color:{_pct_color};'>{_arrow}{abs(_pct):.2f}%</span>"
+                f"</div></div>",
+                unsafe_allow_html=True)
 
         # ── 시장 폭 ──────────────────────────────────────────────────────────
         breadth = get_market_breadth()
@@ -1112,15 +1164,8 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
 
         st.divider()
 
-        # ③ 급등 사유 히스토리
-        st.markdown("#### 🚨 급등 사유 히스토리")
-        # surge_reasons DB에서 단일 사유
-        reason_txt = ""
-        if surge_reasons:
-            rd = surge_reasons.get(str(ticker).zfill(6), {})
-            reason_txt = rd.get("reason","") if isinstance(rd, dict) else ""
-
-        # accumulated.json에서 해당 종목 히스토리 필터
+        # ③ 급등 사유 히스토리 — P1 ui_detail.py L358-396 동일 구조
+        # accumulated.json에서 해당 종목 히스토리 필터 (P1 get_surge_reason_for_ticker 역할)
         _acc = _github_json("data/accumulated.json") or {}
         _acc_items = _acc.get("items", []) if isinstance(_acc, dict) else []
         _hist = []
@@ -1135,21 +1180,16 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
                     _d = _it.get("sendDate","")
                     if len(_d)==8: _d = f"{_d[:4]}.{_d[4:6]}.{_d[6:]}"
                     _hist.append({"date": _d, "reason": _e.get("reason","")})
-            if not _hist or _hist[-1].get("date","") != _it.get("sendDate",""):
-                # fallback: title만 있는 경우
-                pass
 
-        total = len(_hist) + (1 if reason_txt else 0)
-        if total == 0:
-            st.caption(f"ℹ️ '{name}' 관련 특징주 이력 없음")
+        st.markdown(
+            f"#### 🚨 급등 사유 히스토리"
+            f"<span style='font-size:0.6em;font-weight:normal;color:gray;'>"
+            f"&nbsp;(누적 {len(_hist)}건)</span>",
+            unsafe_allow_html=True,
+        )
+        if len(_hist) == 0:
+            st.info(f"ℹ️ '{name}' 관련 특징주 뉴스가 없습니다.")
         else:
-            if reason_txt:
-                st.markdown(
-                    f"<div style='background:#e8f4fd;border-left:3px solid #1976d2;"
-                    f"padding:6px 12px;border-radius:4px;margin:4px 0;font-size:0.88em;'>"
-                    f"<span style='color:#888;font-size:0.85em;'>최근</span>"
-                    f"&nbsp;›&nbsp;{reason_txt}</div>",
-                    unsafe_allow_html=True)
             for _h in _hist[:7]:
                 st.markdown(
                     f"<div style='background:#e8f4fd;border-left:3px solid #1976d2;"
@@ -1160,44 +1200,87 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
 
         st.divider()
 
-        # ④ 잠재적 매도 물량 (CB/BW)
+        # ④ 잠재적 매도 물량 (CB/BW) — P1 ui_detail.py L399-475 동일 로직
         with st.container(border=True):
             st.markdown("#### 🕵️‍♂️ 잠재적 매도 물량 (미상환 사채 5년)")
-            _oh = cb_overhang.get(str(ticker).zfill(6)) or cb_overhang.get(ticker)
-            if _oh and isinstance(_oh, list) and len(_oh) > 0:
-                _active = [b for b in _oh
-                           if not b.get("is_expired") and b.get("unredeemed", 0) > 0]
-                if not _active:
-                    st.success("✅ CB/BW 전량 만기상환 또는 전환 완료")
-                else:
-                    _total_u = sum(b.get("unredeemed", 0) for b in _active)
-                    _total_s = sum(b.get("convertible_shares", 0) for b in _active)
-                    st.error(f"🚨 미전환잔액 {_total_u/1e8:.1f}억원 | "
-                             f"전환가능주식수 {_total_s:,}주")
-                    _rows_cb = [{"회차":      b.get("series", "-"),
-                                 "잔액(억)":  f"{b.get('unredeemed',0)/1e8:.1f}",
-                                 "전환가(원)": f"{b.get('conversion_price',0):,}",
-                                 "전환기간":  b.get("conversion_period","-")}
-                                for b in _active]
-                    st.dataframe(pd.DataFrame(_rows_cb),
-                                 use_container_width=True, hide_index=True)
-                with st.expander("▷ [참고] DART 공시 원문 목록"):
-                    _TYPE2 = {"A":"정기","B":"주요사항","C":"발행","D":"지분",
-                              "F":"외부감사","I":"거래소"}
-                    _ditems = get_dart(ticker)
-                    if _ditems:
-                        for _di in _ditems[:10]:
-                            _rno = _di.get("rcept_no","")
-                            _url = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={_rno}" if _rno else ""
-                            _lbl = f"**[{_di.get('rcept_dt','')[:8]}]** {_di.get('report_nm','')}"
-                            if _url:
-                                st.markdown(f"{_lbl}  \n[공시원문]({_url})")
-                            else:
-                                st.markdown(_lbl)
-                    else:
-                        st.write("공시 없음")
-            else:
+            _cb_balance = cb_overhang.get(str(ticker).zfill(6)) or cb_overhang.get(ticker) or []
+            _active_cb = [b for b in _cb_balance
+                          if not b.get("is_expired") and b.get("unredeemed", 0) > 0]
+            if not _cb_balance:
                 st.info("ℹ️ 최근 5년 내 CB/BW 발행 공시가 없습니다.")
+            elif not _active_cb:
+                st.success("✅ 조회된 CB/BW 전량 만기상환 또는 완전 전환 완료")
+            else:
+                # 발행주식수 (희석률 계산용)
+                _issued_shares = 0
+                try:
+                    _issued_shares = int(
+                        str(kis_basic.get("lstg_stqt", "0")).replace(",", "")
+                    )
+                except Exception:
+                    pass
+                _total_conv_shares = sum(b.get("convertible_shares", 0) for b in _active_cb)
+                _total_unredeemed  = sum(b.get("unredeemed", 0) for b in _active_cb)
+                _dilution = (_total_conv_shares / _issued_shares * 100) if _issued_shares > 0 else 0
+                if _dilution >= 20:
+                    st.error(f"🚨 **미전환잔액 {_total_unredeemed/1e8:.1f}억원 | 전환가능주식수 {_total_conv_shares:,}주 | 희석률 {_dilution:.1f}%**")
+                elif _dilution >= 5:
+                    st.warning(f"⚠️ **미전환잔액 {_total_unredeemed/1e8:.1f}억원 | 전환가능주식수 {_total_conv_shares:,}주 | 희석률 {_dilution:.1f}%**")
+                else:
+                    st.info(f"ℹ️ 미전환잔액 {_total_unredeemed/1e8:.1f}억원 | 전환가능주식수 {_total_conv_shares:,}주 | 희석률 {_dilution:.1f}%")
+
+                _rows_cb = []
+                _danger_series, _warn_series = [], []
+                for b in _cb_balance:
+                    _cp        = b.get("conversion_period", "")
+                    _price     = b.get("conversion_price", 0)
+                    _in_period = _period_contains_today(_cp)
+                    _no_period = not _cp or _cp == "-"
+                    _under_mkt = _price > 0 and cur_price > 0 and _price < cur_price
+                    _over_mkt  = _price > 0 and cur_price > 0 and _price >= cur_price
+                    _is_danger = not b.get("is_expired") and _under_mkt and (_in_period or _no_period)
+                    _is_warn   = not b.get("is_expired") and _in_period and _over_mkt
+                    _label = f"{b.get('series', '-')}회차"
+                    if _is_danger:
+                        _label = f"🔴 {_label}"; _danger_series.append((b.get("series","-"), _price))
+                    elif _is_warn:
+                        _label = f"🟡 {_label}"; _warn_series.append((b.get("series","-"), _price))
+                    _rows_cb.append({
+                        "회차":           _label,
+                        "종류":           "전환사채" if "전환" in b.get("bond_type", "") else "BW",
+                        "미전환잔액(억)":  f"{b.get('unredeemed', 0)/1e8:.1f}",
+                        "전환가액(원)":    f"{_price:,}",
+                        "전환가능주식수":  f"{b.get('convertible_shares', 0):,}",
+                        "전환가능기간":   _cp if _cp else "-",
+                        "데이터 출처":    b.get("source", ""),
+                    })
+                if _danger_series:
+                    _danger_txt = ", ".join(f"{s}회차(전환가:{p:,}원)" for s, p in _danger_series)
+                    st.error(
+                        f"🔴 **전환 리스크: {_danger_txt}** — "
+                        f"전환가액이 현재가({int(cur_price):,}원)보다 낮음 (전환청구기간 미확인 회차 포함)"
+                    )
+                if _warn_series:
+                    _warn_txt = ", ".join(f"{s}회차(전환가:{p:,}원)" for s, p in _warn_series)
+                    st.warning(
+                        f"🟡 **{_warn_txt}** — "
+                        f"전환청구기간 내이나 현재가({int(cur_price):,}원)가 전환가액보다 낮습니다."
+                    )
+                st.dataframe(pd.DataFrame(_rows_cb), use_container_width=True, hide_index=True)
+
+            with st.expander("🛠️ [참고] DART 공시 원문 목록"):
+                _ditems = get_dart(ticker)
+                if _ditems:
+                    for _di in _ditems[:10]:
+                        _rno = _di.get("rcept_no", "")
+                        _url = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={_rno}" if _rno else ""
+                        _lbl = f"**[{_di.get('rcept_dt', '')[:8]}]** {_di.get('report_nm', '')}"
+                        if _url:
+                            st.markdown(f"{_lbl}  \n[공시원문]({_url})")
+                        else:
+                            st.markdown(_lbl)
+                else:
+                    st.write("공시 없음")
 
         st.divider()
 
