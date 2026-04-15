@@ -789,7 +789,7 @@ def render_p1_table(surge_table, rsi_snapshot, watchlist=None, market_filter="�
         score = _tier_score(s)
         for badge, letter in [("👑", "S"), ("🟢", "A"), ("🟡", "B"), ("🟠", "C"), ("🔴", "D")]:
             if letter in s:
-                return f"{badge}{letter} ({score})"
+                return f"({score:03d}) {badge}{letter}"
         return s
     if "등급" in df.columns:
         df["_tier_score"] = df["등급"].apply(_tier_score)
