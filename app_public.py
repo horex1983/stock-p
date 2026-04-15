@@ -813,7 +813,7 @@ def render_p1_table(surge_table, rsi_snapshot, watchlist=None, market_filter="�
         try: cum7 = float(df_raw.at[row.name, "7일누적"])
         except: cum7 = 0.0
         dim = cum7 < 40
-        base = "font-size:12px;padding:2px 6px"
+        base = "font-size:12px;padding:1px 4px"
         if star == "★":
             bg = "#F0E8C0" if dim else "#FFFDE7"
             return [f"background-color:{bg};border-left:3px solid #F9A825;{base}"] * len(row)
@@ -975,6 +975,14 @@ def render_p1_table(surge_table, rsi_snapshot, watchlist=None, market_filter="�
         "장기신호": st.column_config.TextColumn("장기", width="small"),
         "리스크":  st.column_config.TextColumn(width="small"),
     }
+
+    # row height CSS 인젝션 — st.dataframe 내부 grid row를 P1 AgGrid(42px)와 동일하게
+    st.markdown("""
+        <style>
+        div[data-testid="stDataFrame"] div[role="row"] { min-height:35px !important; max-height:35px !important; }
+        div[data-testid="stDataFrame"] div[role="gridcell"] { padding-top:0 !important; padding-bottom:0 !important; font-size:12px !important; }
+        div[data-testid="stDataFrame"] div[role="columnheader"] { padding-top:0 !important; padding-bottom:0 !important; }
+        </style>""", unsafe_allow_html=True)
 
     selected = st.dataframe(
         styler, use_container_width=True, hide_index=True,
