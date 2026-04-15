@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-st.set_page_config(page_title="급등주 모멘텀 대시보드", page_icon="📈",
+st.set_page_config(page_title="📈 Premium Dashboard", page_icon="📈",
                    layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
@@ -1516,7 +1516,7 @@ def render_news(news_items):
 
 
 def main():
-    st.title("📈 급등주 모멘텀 대시보드 (공개)")
+    st.title("🛡️ 급등주 및 특징주 리스크 스캐너")
     st.caption("P1 수집 → GitHub JSON → P2 표시 (단방향 흐름)")
 
     for key, val in [("sel_ticker_surge", ""), ("sel_name_surge", ""),
