@@ -1588,9 +1588,14 @@ def main():
                     st.session_state.sel_ticker_surge = str(row["종목코드"]).zfill(6)
                     st.session_state.sel_name_surge   = row["종목명"]
 
-            # ── 관심종목 토글 버튼 (종목 선택 시 표시) ──────────────────────
+            # ── 안내 문구 / 관심종목 토글 버튼 ──────────────────────────────
             _stk = st.session_state.sel_ticker_surge
             _snm = st.session_state.sel_name_surge
+            if not _stk:
+                st.markdown(
+                    "<div style='text-align:center;color:#888;font-size:0.85em;padding:8px 0;'>"
+                    "👆 위 테이블에서 종목을 클릭하면 상세 분석이 표시됩니다."
+                    "</div>", unsafe_allow_html=True)
             if _stk:
                 _wl_set   = set(str(c).zfill(6) for c in watchlist)
                 _in_wl    = _stk in _wl_set
