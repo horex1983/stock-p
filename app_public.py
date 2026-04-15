@@ -749,10 +749,6 @@ def render_sidebar(indices_p1, surge_items, theme_items, indices_history=None):
             f"<div style='margin:14px 0 6px 0;padding-bottom:5px;border-bottom:1px solid #E8ECF4;'>"
             f"<strong>🛠 시스템 상태</strong>"
             f"&nbsp;&nbsp;{_p1_icon} {_mkt_icon} {_news_icon}"
-            f"</div>"
-            f"<div style='font-size:0.78em;color:#888;margin-bottom:8px;'>"
-            f"수집: {exported_at[:16] if exported_at else '-'} &nbsp;·&nbsp; "
-            f"장: {_mkt_label} &nbsp;·&nbsp; 차트: P1 OHLCV (30분 지연)"
             f"</div>",
             unsafe_allow_html=True)
 
