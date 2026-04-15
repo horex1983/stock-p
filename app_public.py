@@ -106,10 +106,26 @@ def get_surge_table():
     d = _github_json("data/surge_table.json")
     return d if isinstance(d, list) else []
 
+@st.cache_data(ttl=300)
+def get_surge_history():
+    """최근 5거래일 급등주 스냅샷 슬라이딩 윈도우."""
+    d = _github_json("data/surge_history.json")
+    if isinstance(d, dict):
+        return d.get("snapshots", [])
+    return []
+
 def get_indices_p1():
     """P1 exported index data: KOSPI/KOSDAQ/NASDAQ/S&P500 + disparity."""
     d = _github_json("data/indices.json")
     return d if isinstance(d, dict) else {}
+
+@st.cache_data(ttl=300)
+def get_indices_history():
+    """최근 30거래일 지수 시계열 슬라이딩 윈도우."""
+    d = _github_json("data/indices_history.json")
+    if isinstance(d, dict):
+        return d.get("series", [])
+    return []
 
 def get_krx_listing():
     """P1 exported KRX full listing for stock search."""
@@ -461,7 +477,7 @@ def _make_display_df(df, surge_reasons=None):
     return disp
 
 
-def render_sidebar(indices_p1, surge_items, theme_items):
+def render_sidebar(indices_p1, surge_items, theme_items, indices_history=None):
     def _idx_card(label, close_val, chg, status_txt, border_color):
         close_str = f"{close_val:,.2f}" if close_val else "-"
         if chg is None:
@@ -530,6 +546,23 @@ def render_sidebar(indices_p1, surge_items, theme_items):
             _r2c1, _r2c2 = st.columns(2)
             _r2c1.markdown(_idx_card("NASDAQ", nd_c, nd_chg, "", "#2E7D32"), unsafe_allow_html=True)
             _r2c2.markdown(_idx_card("S&P500", sp_c, sp_chg, "", "#2E7D32"), unsafe_allow_html=True)
+
+            # ── 지수 미니차트 (최근 30거래일) ───────────────────────────────
+            if indices_history and len(indices_history) >= 2:
+                try:
+                    _hist_df = pd.DataFrame(reversed(indices_history))  # 오래된 것부터
+                    _hist_df["date"] = pd.to_datetime(_hist_df["date"], format="%Y%m%d")
+                    _hist_df = _hist_df.set_index("date")
+                    _cols_avail = [c for c in ["KOSPI", "KOSDAQ"] if c in _hist_df.columns]
+                    if _cols_avail:
+                        with st.expander("📈 지수 추이 (최근 30일)", expanded=False):
+                            st.line_chart(
+                                _hist_df[_cols_avail].dropna(),
+                                height=140,
+                                use_container_width=True,
+                            )
+                except Exception:
+                    pass
         else:
             pass
 
@@ -1393,23 +1426,51 @@ def main():
         if key not in st.session_state:
             st.session_state[key] = val
 
-    indices_p1    = get_indices_p1()
-    surge_table   = get_surge_table()
-    surge_reasons = get_surge_reasons()
-    rsi_snapshot  = get_rsi_snapshot()
-    cb_overhang   = get_cb_overhang()
-    watchlist     = get_watchlist()
+    indices_p1      = get_indices_p1()
+    indices_history = get_indices_history()
+    surge_table     = get_surge_table()
+    surge_history   = get_surge_history()
+    surge_reasons   = get_surge_reasons()
+    rsi_snapshot    = get_rsi_snapshot()
+    cb_overhang     = get_cb_overhang()
+    watchlist       = get_watchlist()
     surge_items, theme_items = get_accumulated_news()
 
-    market_filter = render_sidebar(indices_p1, surge_items, theme_items)
+    market_filter = render_sidebar(indices_p1, surge_items, theme_items, indices_history)
 
     tab1, tab2, tab3 = st.tabs(["🚀 급등주 랭킹", "⭐ 관심종목", "🔍 종목검색"])
 
     with tab1:
-        if surge_table:
+        # ── 날짜 셀렉터 ─────────────────────────────────────────────────────
+        _today_label = "오늘 (실시간)"
+        _hist_labels = []
+        for _snap in surge_history:
+            _d = _snap.get("date", "")
+            if len(_d) == 8:
+                _hist_labels.append(f"{_d[:4]}.{_d[4:6]}.{_d[6:]}")
+            elif _d:
+                _hist_labels.append(_d)
+        _date_options = [_today_label] + _hist_labels
+        _sel_date = st.radio(
+            "📅 날짜 선택", _date_options,
+            horizontal=True, label_visibility="collapsed",
+            key="surge_date_sel",
+        ) if len(_date_options) > 1 else _today_label
+
+        # 날짜에 따라 표시할 데이터 결정
+        if _sel_date == _today_label or not _hist_labels:
+            _display_surge = surge_table
+            _display_label = "P1 실시간 데이터"
             _meta = get_meta()
             _upd  = _meta.get("updated_at", "")[:16] if _meta else ""
-            _cnt  = len(surge_table)
+        else:
+            _hist_idx = _hist_labels.index(_sel_date)
+            _display_surge = surge_history[_hist_idx].get("data", []) if _hist_idx < len(surge_history) else []
+            _display_label = f"{_sel_date} 스냅샷"
+            _upd = _sel_date
+
+        if _display_surge:
+            _cnt  = len(_display_surge)
             st.markdown(
                 f"""<div style='
                     background:linear-gradient(90deg,#0F1C2E 0%,#1A2E46 100%);
@@ -1418,14 +1479,14 @@ def main():
                     padding:8px 16px; margin-bottom:6px;
                     display:flex; align-items:center; justify-content:space-between;'>
                   <span style='color:#E8EDF3;font-size:1.0em;font-weight:700;letter-spacing:0.5px;'>
-                    🚀&nbsp;급등주 랭킹 — P1 실시간 데이터
+                    🚀&nbsp;급등주 랭킹 — {_display_label}
                   </span>
                   <span style='color:#90CAF9;font-size:0.8em;'>
                     {_cnt}종목&nbsp;&nbsp;|&nbsp;&nbsp;업데이트&nbsp;{_upd}
                   </span>
                 </div>""",
                 unsafe_allow_html=True)
-            result = render_p1_table(surge_table, rsi_snapshot, watchlist, market_filter)
+            result = render_p1_table(_display_surge, rsi_snapshot, watchlist, market_filter)
             if result:
                 selected, df_p1 = result
                 rows = selected.selection.rows if hasattr(selected, "selection") else []
@@ -1457,7 +1518,7 @@ def main():
 
                 render_detail(_stk, _snm, rsi_snapshot, cb_overhang, surge_reasons)
         else:
-            pass
+            st.info("급등주 데이터가 없습니다. P1 데몬이 실행 중인지 확인하세요.")
 
     with tab2:
         st.markdown("<div class='section-title'>⭐ 관심종목 - 전일 종가 기준 (T+1)</div>",
