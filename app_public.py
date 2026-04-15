@@ -1517,7 +1517,6 @@ def render_news(news_items):
 
 def main():
     st.title("🛡️ 급등주 및 특징주 리스크 스캐너")
-    st.caption("P1 수집 → GitHub JSON → P2 표시 (단방향 흐름)")
 
     for key, val in [("sel_ticker_surge", ""), ("sel_name_surge", ""),
                      ("sel_ticker_watch", ""), ("sel_name_watch", "")]:
