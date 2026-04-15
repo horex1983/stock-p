@@ -1594,7 +1594,7 @@ def main():
             if not _stk:
                 st.markdown(
                     "<div style='text-align:center;color:#888;font-size:0.85em;padding:8px 0;'>"
-                    "👆 위 테이블에서 종목을 클릭하면 상세 분석이 표시됩니다."
+                    "☑️ 테이블 좌측 체크박스 선택 시 상세 분석이 표시됩니다."
                     "</div>", unsafe_allow_html=True)
             if _stk:
                 _wl_set   = set(str(c).zfill(6) for c in watchlist)
