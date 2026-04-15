@@ -779,19 +779,23 @@ def render_p1_table(surge_table, rsi_snapshot, watchlist=None, market_filter="�
     if "tier" in df.columns:
         df = df.rename(columns={"tier": "등급"})
 
-    # 등급 표시값을 "(점수) 뱃지" 형태로 변환 → 알파벳 정렬 = 점수 내림차순
-    # 예: "👑 S (100)" → "(100) 👑S",  "🟡 B (52)" → "(052) 🟡B"
+    # 등급 점수 추출 → 점수순 사전 정렬 후 표시는 "👑S (100)" 형태
     import re as _re
+    def _tier_score(v):
+        m = _re.search(r'(\d+)', str(v))
+        return int(m.group(1)) if m else 0
     def _fmt_tier(v):
         s = str(v)
-        m = _re.search(r'(\d+)', s)
-        score = int(m.group(1)) if m else 0
+        score = _tier_score(s)
         for badge, letter in [("👑", "S"), ("🟢", "A"), ("🟡", "B"), ("🟠", "C"), ("🔴", "D")]:
             if letter in s:
-                return f"({score:03d}) {badge}{letter}"
+                return f"{badge}{letter} ({score})"
         return s
     if "등급" in df.columns:
+        df["_tier_score"] = df["등급"].apply(_tier_score)
+        df = df.sort_values("_tier_score", ascending=False, kind="stable")
         df["등급"] = df["등급"].apply(_fmt_tier)
+        df = df.drop(columns=["_tier_score"])
 
     # 관심종목 마커
     _wl = set(str(c).zfill(6) for c in (watchlist or []))
