@@ -1688,70 +1688,145 @@ def main():
             st.info("급등주 데이터가 없습니다. P1 데몬이 실행 중인지 확인하세요.")
 
     with tab2:
-        st.markdown("<div class='section-title'>⭐ 관심종목 - 전일 종가 기준 (T+1)</div>",
-                    unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>⭐ 관심종목</div>", unsafe_allow_html=True)
 
-        # Watchlist management UI
-        with st.expander("➕ 관심종목 관리", expanded=False):
-            col_inp, col_btn = st.columns([3, 1])
-            with col_inp:
-                new_cd = st.text_input("종목코드 (6자리)", max_chars=6,
-                                       placeholder="005930", label_visibility="collapsed")
-            with col_btn:
-                if st.button("추가", use_container_width=True):
-                    cd = str(new_cd).strip().zfill(6)
-                    if cd and cd not in watchlist:
-                        watchlist.append(cd)
-                        if _github_put("data/watchlist.json",
-                                       json.dumps(watchlist, ensure_ascii=False)):
+        # ── 이름 맵 구축: krx_listing(전종목) + surge_table(급등주) ──────────
+        _krx = get_krx_listing()
+        _krx_map = {}
+        if _krx:
+            for _r in _krx:
+                _cd = str(_r.get("종목코드", "")).zfill(6)
+                _nm = _r.get("종목명", "")
+                if _cd and _nm:
+                    _krx_map[_cd] = _nm
+        # surge_table로 덮어씌움 (더 최신)
+        for _r in surge_table:
+            _cd = str(_r.get("종목코드", "")).zfill(6)
+            _nm = _r.get("종목명", "")
+            if _cd and _nm:
+                _krx_map[_cd] = _nm
+
+        # surge_table 코드→행 맵
+        _surge_map = {str(r.get("종목코드", "")).zfill(6): r for r in surge_table if r.get("종목코드")}
+
+        # ── 관심종목 추가 UI ─────────────────────────────────────────────────
+        _add_col, _btn_col = st.columns([3, 1])
+        with _add_col:
+            _new_cd = st.text_input("종목코드 6자리", max_chars=6,
+                                    placeholder="예: 005930",
+                                    label_visibility="collapsed",
+                                    key="wl_add_input")
+        with _btn_col:
+            if st.button("➕ 추가", use_container_width=True, key="wl_add_btn"):
+                _cd = str(_new_cd).strip().zfill(6)
+                if not (_cd.isdigit() and len(_cd) == 6):
+                    st.error("유효한 6자리 종목코드를 입력하세요.")
+                else:
+                    _cur_wl = list(watchlist)
+                    if _cd in _cur_wl:
+                        st.warning(f"이미 등록됨: {_krx_map.get(_cd, _cd)}")
+                    else:
+                        _cur_wl.append(_cd)
+                        _ok = _github_put("data/watchlist.json",
+                                          json.dumps(_cur_wl, ensure_ascii=False))
+                        if _ok:
+                            _nm_disp = _krx_map.get(_cd, _cd)
+                            st.success(f"추가됨: {_nm_disp} ({_cd})")
                             st.cache_data.clear()
                             st.rerun()
                         else:
-                            st.error("GitHub 업로드 실패")
-            if watchlist:
-                # Build code→name map from surge_table first, then raw API fallback
-                _name_map = {str(r.get("종목코드", "")).zfill(6): r.get("종목명", "")
-                             for r in surge_table if r.get("종목코드")}
-                _missing = [c for c in watchlist if not _name_map.get(str(c).zfill(6))]
-                if _missing:
-                    # watchlist_prices.json에서 종목명 보완
-                    _wp = _github_json("data/watchlist_prices.json") or {}
-                    for _mc in _missing:
-                        _nm = (_wp.get(str(_mc).zfill(6)) or {}).get("itmsNm", "")
-                        if _nm:
-                            _name_map[str(_mc).zfill(6)] = _nm
-                st.caption("현재 관심종목 (X 클릭하면 제거)")
-                rm_cols = st.columns(min(len(watchlist), 5))
-                for i, cd in enumerate(watchlist):
-                    _label = _name_map.get(str(cd).zfill(6), "") or cd
-                    with rm_cols[i % 5]:
-                        if st.button(f"{_label} ✕", key=f"rm_{cd}",
-                                     use_container_width=True):
-                            watchlist.remove(cd)
-                            _github_put("data/watchlist.json",
-                                        json.dumps(watchlist, ensure_ascii=False))
+                            st.error("❌ GitHub 저장 실패 — Streamlit Cloud Secrets의 GITHUB_TOKEN 확인 필요")
+
+        # ── 등록된 종목 태그 (✕ 클릭 → 삭제) ────────────────────────────────
+        if watchlist:
+            st.caption(f"등록 종목 {len(watchlist)}개 — ✕ 클릭하면 제거")
+            _rm_cols = st.columns(min(len(watchlist), 5))
+            for _i, _c in enumerate(watchlist):
+                _c6 = str(_c).zfill(6)
+                _lbl = _krx_map.get(_c6, _c6)
+                with _rm_cols[_i % 5]:
+                    if st.button(f"{_lbl} ✕", key=f"wl_rm_{_c6}",
+                                 use_container_width=True):
+                        _new_wl = [x for x in watchlist if str(x).zfill(6) != _c6]
+                        _ok2 = _github_put("data/watchlist.json",
+                                           json.dumps(_new_wl, ensure_ascii=False))
+                        if _ok2:
                             st.cache_data.clear()
                             st.rerun()
+                        else:
+                            st.error("❌ GitHub 저장 실패")
 
+        st.divider()
+
+        # ── 관심종목 테이블 (surge_table + rsi_snapshot 기반) ────────────────
         if not watchlist:
-            st.info("관심종목 없음. 위 관리 패널에서 종목코드를 추가하세요.")
+            st.info("관심종목이 없습니다. 위 입력란에 종목코드를 입력 후 ➕ 추가를 누르세요.")
         else:
-            wdf = get_watchlist_prices(watchlist)
-            if wdf.empty:
-                st.warning("관심종목 시세 조회 실패.")
-            else:
-                result_w = render_watchlist_table(wdf)
-                if result_w:
-                    selected_w, wdf2 = result_w
-                    rows_w = selected_w.selection.rows if hasattr(selected_w, "selection") else []
-                    if rows_w:
-                        row_w = wdf2.iloc[rows_w[0]]
-                        st.session_state.sel_ticker_watch = str(row_w["srtnCd"]).zfill(6)
-                        st.session_state.sel_name_watch   = row_w["itmsNm"]
-                    if st.session_state.sel_ticker_watch:
-                        render_detail(st.session_state.sel_ticker_watch,
-                                      st.session_state.sel_name_watch,
-                                      rsi_snapshot, cb_overhang, surge_reasons)
+            _rsi_data = rsi_snapshot if isinstance(rsi_snapshot, dict) else {}
+            _wl_rows = []
+            for _c in watchlist:
+                _c6 = str(_c).zfill(6)
+                _nm = _krx_map.get(_c6, _c6)
+                _sr = _surge_map.get(_c6, {})
+                _rsi_d = _rsi_data.get(f"{_c6}_daily", {})
+                # 현재가: surge_table에 있으면 사용, 없으면 "-"
+                _price = _sr.get("현재가", "-")
+                if isinstance(_price, (int, float)) and _price > 0:
+                    _price_str = f"{int(_price):,}"
+                else:
+                    _price_str = "-"
+                _chg = _sr.get("당일등락", "-")
+                _chg_str = f"{float(_chg):+.2f}%" if isinstance(_chg, (int, float)) else (
+                    f"{float(_chg):+.2f}%" if str(_chg).lstrip('+-').replace('.','').isdigit() else "-")
+                _wl_rows.append({
+                    "종목코드": _c6,
+                    "종목명":   _nm,
+                    "시장":     _sr.get("시장", "-"),
+                    "현재가":   _price_str,
+                    "등락":     _chg_str,
+                    "신호":     _rsi_d.get("signal", "-"),
+                    "테마":     _sr.get("테마", "-"),
+                    "리스크":   _sr.get("리스크", "-"),
+                    "상태":     "🚀 급등" if _c6 in _surge_map else "📌 보유",
+                })
+            _wdf = pd.DataFrame(_wl_rows)
+
+            def _wl_chg_color(col):
+                styles = []
+                for v in col:
+                    s = str(v)
+                    if s.startswith("+"):   styles.append("color:#C62828;font-weight:600")
+                    elif s.startswith("-"): styles.append("color:#1565C0;font-weight:600")
+                    else:                   styles.append("")
+                return styles
+
+            _wl_styler = _wdf.style.apply(_wl_chg_color, subset=["등락"])
+            _wl_sel = st.dataframe(
+                _wl_styler, use_container_width=True, hide_index=True,
+                on_select="rerun", selection_mode="single-row",
+                column_config={
+                    "종목코드": st.column_config.TextColumn("코드", width="small"),
+                    "종목명":   st.column_config.TextColumn(width="medium"),
+                    "시장":     st.column_config.TextColumn(width="small"),
+                    "현재가":   st.column_config.TextColumn(width="small"),
+                    "등락":     st.column_config.TextColumn(width="small"),
+                    "신호":     st.column_config.TextColumn(width="small"),
+                    "테마":     st.column_config.TextColumn(width="small"),
+                    "리스크":   st.column_config.TextColumn(width="small"),
+                    "상태":     st.column_config.TextColumn(width="small"),
+                },
+                height=min(60 + len(_wl_rows) * 35, 460),
+            )
+            _wl_sel_rows = _wl_sel.selection.rows if hasattr(_wl_sel, "selection") else []
+            if _wl_sel_rows:
+                _wl_row = _wdf.iloc[_wl_sel_rows[0]]
+                st.session_state.sel_ticker_watch = _wl_row["종목코드"]
+                st.session_state.sel_name_watch   = _wl_row["종목명"]
+            st.caption("☑️ 테이블 좌측 체크박스 선택 시 상세 분석이 표시됩니다.")
+            if st.session_state.sel_ticker_watch:
+                render_detail(st.session_state.sel_ticker_watch,
+                              st.session_state.sel_name_watch,
+                              rsi_snapshot, cb_overhang, surge_reasons)
 
     with tab3:
         st.markdown("<div class='section-title'>🔍 종목검색</div>", unsafe_allow_html=True)
