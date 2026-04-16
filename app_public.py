@@ -399,6 +399,14 @@ def get_corp_info(ticker):
         return {}
     return d.get(str(ticker).zfill(6), {})
 
+@st.cache_data(ttl=3600)
+def get_supported_tickers() -> set:
+    """corp_info.json에 수록된 지원 종목코드 셋 반환 (검색 필터용)."""
+    d = _github_json("data/corp_info.json")
+    if not isinstance(d, dict):
+        return set()
+    return {str(k).zfill(6) for k in d.keys()}
+
 
 @st.cache_data(ttl=300)
 def get_ohlcv(ticker):
@@ -1865,15 +1873,25 @@ def main():
                 "그 외 일반 종목은 종목 검색은 가능하나 상세 데이터를 지원하지 않습니다."
             )
         elif srch.strip():
+            _supported = get_supported_tickers()
             df_krx = pd.DataFrame(krx)
+            # 지원 종목만 필터 (corp_info.json 수록 종목)
+            df_krx = df_krx[df_krx["종목코드"].apply(
+                lambda c: str(c).zfill(6) in _supported
+            )].reset_index(drop=True)
+
             q = srch.strip()
             if q.isdigit():
                 result_krx = df_krx[df_krx["종목코드"].str.startswith(q.zfill(max(len(q), 4)))]
             else:
                 result_krx = df_krx[df_krx["종목명"].str.contains(q, case=False, na=False)]
-            result_krx = result_krx.head(30).reset_index(drop=True)
+
+            # 표시 컬럼: 종목명, 종목코드만
+            _disp_cols = [c for c in ["종목명", "종목코드"] if c in result_krx.columns]
+            result_krx = result_krx[_disp_cols].head(30).reset_index(drop=True)
+
             if result_krx.empty:
-                st.info("검색 결과 없음")
+                st.info("검색 결과 없음 — 최근 7일 급등 이력이 있는 종목만 지원됩니다.")
             else:
                 sel_krx = st.dataframe(result_krx, use_container_width=True, hide_index=True,
                                        on_select="rerun", selection_mode="single-row")
