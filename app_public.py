@@ -476,9 +476,11 @@ def render_chart(ticker, name):
                              name="거래량MA20", line=dict(color="#f57c00", width=1)),
                   row=2, col=1)
     fig.update_layout(
-        template="plotly_white", height=550, margin=dict(l=10, r=10, t=30, b=10),
-        title=dict(text=f"{name} ({ticker}) - 3개월", font=dict(size=13), x=0),
-        xaxis_rangeslider_visible=False, legend=dict(orientation="h", y=1.08, x=0))
+        template="plotly_white", height=550, margin=dict(l=10, r=10, t=50, b=10),
+        title=dict(text=f"{name} ({ticker}) - 3개월", font=dict(size=13), x=0, y=0.98),
+        xaxis_rangeslider_visible=False,
+        legend=dict(orientation="h", y=1.06, x=0, font=dict(size=11),
+                    bgcolor="rgba(255,255,255,0.8)", borderwidth=0))
     fig.update_yaxes(gridcolor="#eeeeee")
     fig.update_xaxes(gridcolor="#eeeeee")
     st.plotly_chart(fig, use_container_width=True, key=f"chart_{ticker}")
@@ -1577,59 +1579,11 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None, s
                     st.caption(f"EPS: {int(_eps_base):,}원 (OHLCV 데이터 확보 후 재계산 가능)")
 
     # ════════════════════════════════════════════════════════════════════════
-    # 오른쪽: 캔들 차트 + RSI 신호
+    # 오른쪽: 캔들 차트
     # ════════════════════════════════════════════════════════════════════════
     with col_right:
         st.markdown("### 📈 일봉 캔들 차트")
         render_chart(ticker, name)
-
-        # ── RSI 신호 (rsi_snapshot 있을 때만 표시) ─────────────────────────
-        # rsi_snapshot 키 형식: {ticker}_daily / {ticker}_5m / {ticker}_1wk
-        if rsi_snapshot and isinstance(rsi_snapshot, dict):
-            _tk = str(ticker).zfill(6)
-            _rsi_d  = rsi_snapshot.get(f"{_tk}_daily",  {}) or {}
-            _rsi_5m = rsi_snapshot.get(f"{_tk}_5m",     {}) or {}
-            _rsi_w  = rsi_snapshot.get(f"{_tk}_1wk",    {}) or {}
-
-            def _rsi_badge(val):
-                """RSI 값에 따른 색상 배지 반환"""
-                try:
-                    v = float(val)
-                except Exception:
-                    return "<span style='color:#999;'>-</span>"
-                if v >= 70:
-                    color, label = "#c62828", "과매수"
-                elif v <= 30:
-                    color, label = "#1565c0", "과매도"
-                else:
-                    color, label = "#2e7d32", "중립"
-                return (f"<span style='color:{color};font-weight:700;'>"
-                        f"{v:.1f}</span>"
-                        f"<span style='color:{color};font-size:0.8em;'> ({label})</span>")
-
-            _rsi_rows = []
-            if _rsi_5m.get("rsi") is not None:
-                _rsi_rows.append(("5분봉 RSI", _rsi_5m.get("rsi"), _rsi_5m.get("signal", "")))
-            if _rsi_d.get("rsi") is not None:
-                _rsi_rows.append(("일봉 RSI",  _rsi_d.get("rsi"),  _rsi_d.get("signal", "")))
-            if _rsi_w.get("rsi") is not None:
-                _rsi_rows.append(("주봉 RSI",  _rsi_w.get("rsi"),  _rsi_w.get("signal", "")))
-
-            if _rsi_rows:
-                st.markdown("#### 📊 RSI 신호")
-                _rsi_cols = st.columns(len(_rsi_rows))
-                for _ci, (_lbl, _val, _sig) in enumerate(_rsi_rows):
-                    with _rsi_cols[_ci]:
-                        st.markdown(
-                            f"<div style='background:#f8f9fa;border-radius:8px;"
-                            f"padding:10px 14px;text-align:center;'>"
-                            f"<div style='font-size:0.78em;color:#888;margin-bottom:4px;'>{_lbl}</div>"
-                            f"<div style='font-size:1.2em;'>{_rsi_badge(_val)}</div>"
-                            + (f"<div style='font-size:0.75em;color:#555;margin-top:4px;'>{_sig}</div>"
-                               if _sig else "")
-                            + "</div>",
-                            unsafe_allow_html=True
-                        )
 
 
 def main():
