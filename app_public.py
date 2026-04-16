@@ -7,6 +7,7 @@ import os, json, base64, logging, requests, re
 from collections import Counter
 import streamlit as st
 import streamlit.components.v1 as _components
+from streamlit_local_storage import LocalStorage
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -1690,26 +1691,33 @@ def main():
     with tab2:
         st.markdown("<div class='section-title'>⭐ 관심종목</div>", unsafe_allow_html=True)
 
-        # ── 이름 맵 구축: krx_listing(전종목) + surge_table(급등주) ──────────
+        # ── localStorage에서 관심종목 읽기 ──────────────────────────────────
+        _ls = LocalStorage()
+        _ls_raw = _ls.getItem("p2_watchlist")
+        if isinstance(_ls_raw, list):
+            _local_wl = [str(x).zfill(6) for x in _ls_raw]
+        elif isinstance(_ls_raw, str):
+            try:    _local_wl = [str(x).zfill(6) for x in json.loads(_ls_raw)]
+            except: _local_wl = []
+        else:
+            _local_wl = []
+
+        # ── 이름 맵: krx_listing + surge_table ───────────────────────────────
         _krx = get_krx_listing()
         _krx_map = {}
-        if _krx:
-            for _r in _krx:
-                _cd = str(_r.get("종목코드", "")).zfill(6)
-                _nm = _r.get("종목명", "")
-                if _cd and _nm:
-                    _krx_map[_cd] = _nm
-        # surge_table로 덮어씌움 (더 최신)
+        for _r in (_krx or []):
+            _cd = str(_r.get("종목코드", "")).zfill(6)
+            _nm = _r.get("종목명", "")
+            if _cd and _nm: _krx_map[_cd] = _nm
         for _r in surge_table:
             _cd = str(_r.get("종목코드", "")).zfill(6)
             _nm = _r.get("종목명", "")
-            if _cd and _nm:
-                _krx_map[_cd] = _nm
+            if _cd and _nm: _krx_map[_cd] = _nm
 
         # surge_table 코드→행 맵
-        _surge_map = {str(r.get("종목코드", "")).zfill(6): r for r in surge_table if r.get("종목코드")}
+        _surge_map = {str(r.get("종목코드","")).zfill(6): r for r in surge_table if r.get("종목코드")}
 
-        # ── 관심종목 추가 UI ─────────────────────────────────────────────────
+        # ── 추가 UI ──────────────────────────────────────────────────────────
         _add_col, _btn_col = st.columns([3, 1])
         with _add_col:
             _new_cd = st.text_input("종목코드 6자리", max_chars=6,
@@ -1721,63 +1729,44 @@ def main():
                 _cd = str(_new_cd).strip().zfill(6)
                 if not (_cd.isdigit() and len(_cd) == 6):
                     st.error("유효한 6자리 종목코드를 입력하세요.")
+                elif _cd in _local_wl:
+                    st.warning(f"이미 등록됨: {_krx_map.get(_cd, _cd)}")
                 else:
-                    _cur_wl = list(watchlist)
-                    if _cd in _cur_wl:
-                        st.warning(f"이미 등록됨: {_krx_map.get(_cd, _cd)}")
-                    else:
-                        _cur_wl.append(_cd)
-                        _ok = _github_put("data/watchlist.json",
-                                          json.dumps(_cur_wl, ensure_ascii=False))
-                        if _ok:
-                            _nm_disp = _krx_map.get(_cd, _cd)
-                            st.success(f"추가됨: {_nm_disp} ({_cd})")
-                            st.cache_data.clear()
-                            st.rerun()
-                        else:
-                            st.error("❌ GitHub 저장 실패 — Streamlit Cloud Secrets의 GITHUB_TOKEN 확인 필요")
+                    _new_wl = _local_wl + [_cd]
+                    _ls.setItem("p2_watchlist", json.dumps(_new_wl))
+                    st.rerun()
 
-        # ── 등록된 종목 태그 (✕ 클릭 → 삭제) ────────────────────────────────
-        if watchlist:
-            st.caption(f"등록 종목 {len(watchlist)}개 — ✕ 클릭하면 제거")
-            _rm_cols = st.columns(min(len(watchlist), 5))
-            for _i, _c in enumerate(watchlist):
-                _c6 = str(_c).zfill(6)
+        # ── 등록 종목 태그 (✕ → 삭제) ────────────────────────────────────────
+        if _local_wl:
+            st.caption(f"등록 종목 {len(_local_wl)}개 — ✕ 클릭하면 제거")
+            _rm_cols = st.columns(min(len(_local_wl), 5))
+            for _i, _c6 in enumerate(_local_wl):
                 _lbl = _krx_map.get(_c6, _c6)
                 with _rm_cols[_i % 5]:
                     if st.button(f"{_lbl} ✕", key=f"wl_rm_{_c6}",
                                  use_container_width=True):
-                        _new_wl = [x for x in watchlist if str(x).zfill(6) != _c6]
-                        _ok2 = _github_put("data/watchlist.json",
-                                           json.dumps(_new_wl, ensure_ascii=False))
-                        if _ok2:
-                            st.cache_data.clear()
-                            st.rerun()
-                        else:
-                            st.error("❌ GitHub 저장 실패")
+                        _after = [x for x in _local_wl if x != _c6]
+                        _ls.setItem("p2_watchlist", json.dumps(_after))
+                        st.rerun()
 
         st.divider()
 
-        # ── 관심종목 테이블 (surge_table + rsi_snapshot 기반) ────────────────
-        if not watchlist:
+        # ── 관심종목 테이블 ───────────────────────────────────────────────────
+        if not _local_wl:
             st.info("관심종목이 없습니다. 위 입력란에 종목코드를 입력 후 ➕ 추가를 누르세요.")
         else:
             _rsi_data = rsi_snapshot if isinstance(rsi_snapshot, dict) else {}
             _wl_rows = []
-            for _c in watchlist:
-                _c6 = str(_c).zfill(6)
-                _nm = _krx_map.get(_c6, _c6)
-                _sr = _surge_map.get(_c6, {})
+            for _c6 in _local_wl:
+                _nm  = _krx_map.get(_c6, _c6)
+                _sr  = _surge_map.get(_c6, {})
                 _rsi_d = _rsi_data.get(f"{_c6}_daily", {})
-                # 현재가: surge_table에 있으면 사용, 없으면 "-"
-                _price = _sr.get("현재가", "-")
-                if isinstance(_price, (int, float)) and _price > 0:
-                    _price_str = f"{int(_price):,}"
-                else:
-                    _price_str = "-"
-                _chg = _sr.get("당일등락", "-")
-                _chg_str = f"{float(_chg):+.2f}%" if isinstance(_chg, (int, float)) else (
-                    f"{float(_chg):+.2f}%" if str(_chg).lstrip('+-').replace('.','').isdigit() else "-")
+                _price = _sr.get("현재가", None)
+                _price_str = f"{int(_price):,}" if isinstance(_price, (int, float)) and _price > 0 else "-"
+                _chg = _sr.get("당일등락", None)
+                try:
+                    _chg_str = f"{float(_chg):+.2f}%" if _chg is not None else "-"
+                except: _chg_str = "-"
                 _wl_rows.append({
                     "종목코드": _c6,
                     "종목명":   _nm,
