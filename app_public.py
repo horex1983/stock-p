@@ -427,14 +427,13 @@ def get_ohlcv(ticker):
     return df
 
 
-def render_chart(ticker, name):
+def render_chart(ticker, name, h_band=0.0, l_band=0.0):
     df = get_ohlcv(ticker)
     if df.empty:
         st.caption("차트 데이터 없음")
         return
     df["MA5"]  = df["Close"].rolling(5).mean()
     df["MA20"] = df["Close"].rolling(20).mean()
-    df["MA60"] = df["Close"].rolling(60).mean()
     df["BB_std"]   = df["Close"].rolling(20).std()
     df["BB_upper"] = df["MA20"] + 2 * df["BB_std"]
     df["BB_lower"] = df["MA20"] - 2 * df["BB_std"]
@@ -463,8 +462,23 @@ def render_chart(ticker, name):
                              line=dict(color="#2e7d32", width=1.2, dash="dot")), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df["MA20"], name="MA20",
                              line=dict(color="#f57c00", width=1.5)), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df["MA60"], name="MA60",
-                             line=dict(color="#7b1fa2", width=1.5)), row=1, col=1)
+
+    # ── 밸류에이션 밴드 수평선 ─────────────────────────────────────────────
+    if h_band > 0 and l_band > 0 and h_band > l_band:
+        _x0, _x1 = df.index[0], df.index[-1]
+        fig.add_shape(type="line", x0=_x0, x1=_x1, y0=h_band, y1=h_band,
+                      line=dict(color="rgba(198,40,40,0.7)", width=1.5, dash="dash"),
+                      row=1, col=1)
+        fig.add_shape(type="line", x0=_x0, x1=_x1, y0=l_band, y1=l_band,
+                      line=dict(color="rgba(21,101,192,0.7)", width=1.5, dash="dash"),
+                      row=1, col=1)
+        fig.add_annotation(x=_x1, y=h_band, text=f"상단 {int(h_band):,}",
+                           showarrow=False, xanchor="right", font=dict(size=10, color="#c62828"),
+                           bgcolor="rgba(255,255,255,0.7)", row=1, col=1)
+        fig.add_annotation(x=_x1, y=l_band, text=f"하단 {int(l_band):,}",
+                           showarrow=False, xanchor="right", font=dict(size=10, color="#1565c0"),
+                           bgcolor="rgba(255,255,255,0.7)", row=1, col=1)
+
     # Volume
     close_v = df["Close"].values.flatten()
     open_v  = df["Open"].values.flatten()
@@ -1476,114 +1490,43 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None, s
 
         st.divider()
 
-        # ⑥ 밸류에이션 (Audited PER Band) — P1 ui_detail.py 동일 알고리즘
-        st.markdown("#### 📈 밸류에이션 (Audited)")
+        # ⑥ 밸류에이션 밴드 — P1 export 시 사전 계산된 val_h_band / val_l_band 사용
+        st.markdown("#### 📈 밸류에이션")
         with st.container(border=True):
-            # kis_fin_ratio: 5년치 리스트 (export_to_github Full Export 기준)
-            _fin_list = kis_ratio if isinstance(kis_ratio, list) else (
-                        [kis_ratio] if isinstance(kis_ratio, dict) and kis_ratio else [])
-
-            _latest_fin  = _fin_list[0] if _fin_list else {}
-            _eps_base    = 0.0
-            try: _eps_base = float(_latest_fin.get("eps", 0) or 0)
+            h_band = 0.0
+            l_band = 0.0
+            try: h_band = float(corp.get("val_h_band", 0) or 0)
+            except Exception: pass
+            try: l_band = float(corp.get("val_l_band", 0) or 0)
             except Exception: pass
 
-            # 연도별 PER 밴드 계산
-            _year_bands = []
-            if _eps_base > 0 and not ohlcv.empty:
-                for _vr in _fin_list[:5]:
-                    try:
-                        _veps = float(_vr.get("eps", 0) or 0)
-                        _vym  = str(_vr.get("stac_yymm", ""))
-                        if _veps <= 0 or len(_vym) < 6:
-                            continue
-                        _vyear = int(_vym[:4])
-                        _vmon  = int(_vym[4:6])
-                        _vys   = pd.Timestamp(year=_vyear, month=1, day=1)
-                        _vye   = (pd.Timestamp(year=_vyear, month=_vmon, day=1)
-                                  + pd.offsets.MonthEnd(0))
-                        _vslice = ohlcv[(ohlcv.index >= _vys) & (ohlcv.index <= _vye)]
-                        if _vslice.empty:
-                            continue
-                        _vph = float(_vslice["High"].max()) / _veps
-                        _vpl = float(_vslice["Low"].min())  / _veps
-                        if 0 < _vpl < _vph < 500:
-                            _year_bands.append({
-                                "year": _vyear, "per_h": _vph, "per_l": _vpl,
-                                "year_h": float(_vslice["High"].max()),
-                                "year_l": float(_vslice["Low"].min()),
-                            })
-                    except Exception:
-                        continue
+            if h_band > 0 and l_band > 0 and h_band > l_band:
+                if cur_price > 0 and cur_price < l_band:
+                    st.success(f"🛡️ **저평가 구간** — 현재가가 하단({int(l_band):,}원) 아래입니다.")
+                elif cur_price > 0 and cur_price <= h_band:
+                    st.info(f"✅ **적정 구간** — 현재가가 적정 범위 내에 있습니다.")
+                elif cur_price > 0:
+                    st.warning(f"⚠️ **고평가 구간** — 현재가가 상단({int(h_band):,}원) 위에 있습니다.")
 
-            # 중앙값 PER 기반 밴드 산출
-            _val_ok = False
-            h_band = l_band = 0.0
-            _med_ph = _med_pl = 0.0
-            _used_years = []
-            if _eps_base > 0 and _year_bands:
-                _sph = sorted(b["per_h"] for b in _year_bands)
-                _spl = sorted(b["per_l"] for b in _year_bands)
-                _n   = len(_sph)
-                _med_ph = (_sph[_n//2] if _n % 2 == 1
-                           else (_sph[_n//2-1] + _sph[_n//2]) / 2)
-                _med_pl = (_spl[_n//2] if _n % 2 == 1
-                           else (_spl[_n//2-1] + _spl[_n//2]) / 2)
-                h_band = _eps_base * _med_ph
-                l_band = _eps_base * _med_pl
-                _used_years = [str(b["year"]) for b in _year_bands]
-                _val_ok = True
-
-            # 렌더링
-            if _val_ok:
-                if cur_price < l_band:
-                    st.success(f"🛡️ **강력 저평가** (매수 유리) — 현재가가 밴드 하단({int(l_band):,}원) 아래입니다.")
-                elif l_band <= cur_price <= h_band:
-                    st.info(f"✅ **적정 주가** (보유/관찰) — 주가가 역사적 밴드({int(l_band):,} ~ {int(h_band):,}원) 내에 있습니다.")
-                else:
-                    st.warning(f"⚠️ **고평가 주의** — 현재가가 밴드 상단({int(h_band):,}원) 위에 있습니다.")
-                if h_band > l_band:
+                if cur_price > 0:
                     _pos = (cur_price - l_band) / (h_band - l_band) * 100
                     st.progress(max(0, min(100, int(_pos))),
                                 text=f"현재 주가 위치 ({int(_pos)}%)")
                 st.markdown(
-                    f"**Max Value:** {int(h_band):,}원 &nbsp;&nbsp;|&nbsp;&nbsp; **Min Value:** {int(l_band):,}원",
+                    f"**상단:** {int(h_band):,}원 &nbsp;&nbsp;|&nbsp;&nbsp; **하단:** {int(l_band):,}원",
                     unsafe_allow_html=True)
-                with st.expander(f"📊 연도별 PER 밴드 상세 ({', '.join(_used_years)})"):
-                    _rows_val = []
-                    for _b in _year_bands:
-                        _rows_val.append({
-                            "기준연도":        str(_b["year"]),
-                            "고가PER":        f"{_b['per_h']:.1f}배",
-                            "저가PER":        f"{_b['per_l']:.1f}배",
-                            "현EPS 적용 상단": f"{int(_eps_base * _b['per_h']):,}원",
-                            "현EPS 적용 하단": f"{int(_eps_base * _b['per_l']):,}원",
-                        })
-                    st.dataframe(pd.DataFrame(_rows_val),
-                                 use_container_width=True, hide_index=True)
-                    st.caption(
-                        f"※ 중앙값 PER 사용: 고가PER {_med_ph:.1f}배 / "
-                        f"저가PER {_med_pl:.1f}배 × 최신 EPS {int(_eps_base):,}원")
-            else:
-                if not _fin_list:
-                    # kis_fin_ratio 자체가 없음 → 모니터링 미대상 또는 Full Export 미수집
-                    st.info("ℹ️ 재무비율 데이터 없음 — Full Export 대상 종목만 밸류에이션이 표시됩니다.")
-                    st.caption("💡 급등주·관심종목으로 추가된 후 P1 Full Export가 실행되면 데이터가 채워집니다.")
-                elif _eps_base <= 0:
-                    # fin_list는 있지만 EPS ≤ 0 → 실적 적자
-                    st.error("🚨 이익 적자: 가치 산출 불가 (Valuation Skip)")
-                    st.caption("💡 본 종목은 현재 적자 상태이거나 유의미한 이익 데이터를 공시하지 않았습니다.")
-                else:
-                    # fin_list·EPS는 있지만 OHLCV 부족으로 year_bands 미생성
-                    st.warning("⚠️ 역사적 주가 데이터 부족 — PER 밴드를 계산할 수 없습니다.")
-                    st.caption(f"EPS: {int(_eps_base):,}원 (OHLCV 데이터 확보 후 재계산 가능)")
+            elif not corp:
+                st.info("ℹ️ 데이터 없음 — 모니터링 대상 등록 후 표시됩니다.")
+            elif h_band == 0:
+                st.info("ℹ️ 밸류에이션 데이터 준비 중 — 다음 Full Export 후 표시됩니다.")
+                st.caption("이익 적자이거나 데이터 수집 중인 종목은 산출되지 않습니다.")
 
     # ════════════════════════════════════════════════════════════════════════
     # 오른쪽: 캔들 차트
     # ════════════════════════════════════════════════════════════════════════
     with col_right:
         st.markdown("### 📈 일봉 캔들 차트")
-        render_chart(ticker, name)
+        render_chart(ticker, name, h_band=h_band, l_band=l_band)
 
 
 def main():
