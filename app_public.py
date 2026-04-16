@@ -749,14 +749,12 @@ def render_sidebar(indices_p1, surge_items, theme_items, indices_history=None):
             _pct    = _nf.get("change_pct", 0)
             _pct_color = "#c62828" if _sign in ("1", "2") else ("#1565c0" if _sign in ("4", "5") else "#555")
             _api_name  = _nf.get("name", "")
-            if _nf.get("is_ls_futures"):
-                _label = f"{_api_name} 🌙" if _api_name else "KRX 야간선물 🌙"
-            elif _nf.get("is_night"):
-                _label = f"{_api_name} 🌙" if _api_name else "K200 야간선물 🌙"
+            if _nf.get("is_ls_futures") or _nf.get("is_night"):
+                _label = "KOSPI 야간선물 🌙"
             elif _nf.get("is_index_fallback"):
                 _label = "KOSPI200 지수 (야간선물 거래없음)"
             else:
-                _label = "K200 선물(전일)"
+                _label = "KOSPI 야간선물"
             st.markdown(
                 f"<div style='border-left:3px solid #F9A825;background:#FAFBFD;"
                 f"border-radius:0 8px 8px 0;padding:8px 10px;margin-bottom:6px;'>"
