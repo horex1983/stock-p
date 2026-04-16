@@ -1582,7 +1582,8 @@ def main():
     st.title("🛡️ 급등주 및 특징주 리스크 스캐너")
 
     for key, val in [("sel_ticker_surge", ""), ("sel_name_surge", ""),
-                     ("sel_ticker_watch", ""), ("sel_name_watch", "")]:
+                     ("sel_ticker_watch", ""), ("sel_name_watch", ""),
+                     ("sel_ticker_search", ""), ("sel_name_search", "")]:
         if key not in st.session_state:
             st.session_state[key] = val
 
@@ -1817,8 +1818,13 @@ def main():
 
     with tab3:
         st.markdown("<div class='section-title'>🔍 종목검색</div>", unsafe_allow_html=True)
+        _prev_srch = st.session_state.get("_prev_srch_q", "")
         srch = st.text_input("검색어", placeholder="예: 삼성전자 / 005930",
                               label_visibility="collapsed", key="stock_search_input")
+        if srch != _prev_srch:
+            st.session_state._prev_srch_q      = srch
+            st.session_state.sel_ticker_search = ""
+            st.session_state.sel_name_search   = ""
         krx = get_krx_listing()
         if not krx:
             st.info("종목 목록을 불러오는 중... P1이 krx_listing.json을 export하지 않았을 수 있습니다.")
@@ -1838,11 +1844,11 @@ def main():
                 rows_krx = sel_krx.selection.rows if hasattr(sel_krx, "selection") else []
                 if rows_krx:
                     r = result_krx.iloc[rows_krx[0]]
-                    st.session_state.sel_ticker_surge = str(r["종목코드"]).zfill(6)
-                    st.session_state.sel_name_surge   = r["종목명"]
-                if st.session_state.get("sel_ticker_surge"):
-                    render_detail(st.session_state.sel_ticker_surge,
-                                  st.session_state.sel_name_surge,
+                    st.session_state.sel_ticker_search = str(r["종목코드"]).zfill(6)
+                    st.session_state.sel_name_search   = r["종목명"]
+                if st.session_state.sel_ticker_search:
+                    render_detail(st.session_state.sel_ticker_search,
+                                  st.session_state.sel_name_search,
                                   rsi_snapshot, cb_overhang, surge_reasons)
 
 
