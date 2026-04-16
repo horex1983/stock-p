@@ -609,64 +609,66 @@ def render_sidebar(indices_p1, surge_items, theme_items, indices_history=None):
                 raw = item.get("sendDate", "")
                 return f"{raw[:4]}.{raw[4:6]}.{raw[6:]}" if len(raw) == 8 else raw
 
+            # ── 특징주 / 특징테마 토글 버튼 (나란히) ───────────────────────────
+            for _k in ["surge_day_idx", "theme_day_idx",
+                       "_show_surge_panel", "_show_theme_panel"]:
+                if _k not in st.session_state:
+                    st.session_state[_k] = 0 if _k.endswith("idx") else False
+
             col_s, col_t = st.columns(2)
-
-            # 특징주 팝오버
             with col_s:
-                if "surge_day_idx" not in st.session_state:
-                    st.session_state.surge_day_idx = 0
-                with st.expander("특징주", expanded=False):
-                    if surge_items:
-                        c1, c2, c3 = st.columns([1, 4, 1])
-                        cur = st.session_state.surge_day_idx
-                        if c1.button("◀", key="sp_prev",
-                                     disabled=cur >= len(surge_items) - 1):
-                            st.session_state.surge_day_idx = cur + 1
-                        if c3.button("▶", key="sp_next", disabled=cur == 0):
-                            st.session_state.surge_day_idx = cur - 1
-                        idx = min(st.session_state.surge_day_idx, len(surge_items) - 1)
-                        c2.markdown(f"<div style='text-align:center'>{_fmt_date(surge_items[idx])}</div>",
-                                    unsafe_allow_html=True)
-                        entries = _parse_body_entries(surge_items[idx].get("text", ""))
-                        shown = 0
-                        for e in entries:
-                            if re.search(r'스팩|SPAC', e.get('name', ''), re.IGNORECASE): continue
-                            if re.search(r'신규\s*상장|상장\s*첫날|상장일', e.get('reason', '')): continue
-                            try:
-                                rv = float(re.search(r'[+\-]?([\d.]+)%', e['rate']).group(1))
-                            except: rv = 0.0
-                            if rv < 15.0: continue
-                            rate_html = f'<span style="color:#f85149">{e["rate"]}</span>'
-                            st.markdown(f"**{e['name']}** {rate_html} : {e['reason']}",
-                                        unsafe_allow_html=True)
-                            shown += 1
-                        pass
-                    else:
-                        pass
-
-            # 특징테마 팝오버
+                _s_label = "특징주 ▲" if st.session_state._show_surge_panel else "특징주 ▼"
+                if st.button(_s_label, key="btn_surge_panel", use_container_width=True):
+                    st.session_state._show_surge_panel = not st.session_state._show_surge_panel
+                    st.session_state._show_theme_panel = False
             with col_t:
-                if "theme_day_idx" not in st.session_state:
-                    st.session_state.theme_day_idx = 0
-                with st.expander("특징테마", expanded=False):
-                    if theme_items:
-                        c1, c2, c3 = st.columns([1, 4, 1])
-                        cur = st.session_state.theme_day_idx
-                        if c1.button("◀", key="tp_prev",
-                                     disabled=cur >= len(theme_items) - 1):
-                            st.session_state.theme_day_idx = cur + 1
-                        if c3.button("▶", key="tp_next", disabled=cur == 0):
-                            st.session_state.theme_day_idx = cur - 1
-                        idx = min(st.session_state.theme_day_idx, len(theme_items) - 1)
-                        c2.markdown(f"<div style='text-align:center'>{_fmt_date(theme_items[idx])}</div>",
+                _t_label = "특징테마 ▲" if st.session_state._show_theme_panel else "특징테마 ▼"
+                if st.button(_t_label, key="btn_theme_panel", use_container_width=True):
+                    st.session_state._show_theme_panel = not st.session_state._show_theme_panel
+                    st.session_state._show_surge_panel = False
+
+            # 특징주 패널 — 전체 너비로 아래에 표시
+            if st.session_state._show_surge_panel:
+                if surge_items:
+                    c1, c2, c3 = st.columns([1, 4, 1])
+                    cur = st.session_state.surge_day_idx
+                    if c1.button("◀", key="sp_prev",
+                                 disabled=cur >= len(surge_items) - 1):
+                        st.session_state.surge_day_idx = cur + 1
+                    if c3.button("▶", key="sp_next", disabled=cur == 0):
+                        st.session_state.surge_day_idx = cur - 1
+                    idx = min(st.session_state.surge_day_idx, len(surge_items) - 1)
+                    c2.markdown(f"<div style='text-align:center'>{_fmt_date(surge_items[idx])}</div>",
+                                unsafe_allow_html=True)
+                    entries = _parse_body_entries(surge_items[idx].get("text", ""))
+                    for e in entries:
+                        if re.search(r'스팩|SPAC', e.get('name', ''), re.IGNORECASE): continue
+                        if re.search(r'신규\s*상장|상장\s*첫날|상장일', e.get('reason', '')): continue
+                        try:
+                            rv = float(re.search(r'[+\-]?([\d.]+)%', e['rate']).group(1))
+                        except: rv = 0.0
+                        if rv < 15.0: continue
+                        rate_html = f'<span style="color:#f85149">{e["rate"]}</span>'
+                        st.markdown(f"**{e['name']}** {rate_html} : {e['reason']}",
                                     unsafe_allow_html=True)
-                        entries = _parse_theme_entries(theme_items[idx].get("text", ""))
-                        for e in entries:
-                            st.markdown(f'<span style="color:#f85149;font-weight:bold">▷</span> {e}',
-                                        unsafe_allow_html=True)
-                        pass
-                    else:
-                        pass
+
+            # 특징테마 패널 — 전체 너비로 아래에 표시
+            if st.session_state._show_theme_panel:
+                if theme_items:
+                    c1, c2, c3 = st.columns([1, 4, 1])
+                    cur = st.session_state.theme_day_idx
+                    if c1.button("◀", key="tp_prev",
+                                 disabled=cur >= len(theme_items) - 1):
+                        st.session_state.theme_day_idx = cur + 1
+                    if c3.button("▶", key="tp_next", disabled=cur == 0):
+                        st.session_state.theme_day_idx = cur - 1
+                    idx = min(st.session_state.theme_day_idx, len(theme_items) - 1)
+                    c2.markdown(f"<div style='text-align:center'>{_fmt_date(theme_items[idx])}</div>",
+                                unsafe_allow_html=True)
+                    entries = _parse_theme_entries(theme_items[idx].get("text", ""))
+                    for e in entries:
+                        st.markdown(f'<span style="color:#f85149;font-weight:bold">▷</span> {e}',
+                                    unsafe_allow_html=True)
 
         # ── 키워드 워드클라우드 ───────────────────────────────────────────────
         top_kw = _get_top_keywords(surge_items, n=8)
@@ -699,17 +701,28 @@ def render_sidebar(indices_p1, surge_items, theme_items, indices_history=None):
 
         # ── 휴장일 ───────────────────────────────────────────────────────────
         st.markdown("### 🗓️ 휴장일", unsafe_allow_html=True)
+        for _k in ["_show_dom_hol", "_show_us_hol"]:
+            if _k not in st.session_state:
+                st.session_state[_k] = False
         _hcol1, _hcol2 = st.columns(2)
         with _hcol1:
-            with st.expander("🇰🇷 국내", expanded=False):
-                st.info("🇰🇷 **코스피/코스닥 휴장일**")
-                for h in _DOMESTIC_HOLIDAYS:
-                    st.markdown(f"- **{h['date']}**: {h['reason']}")
+            _dl = "🇰🇷 국내 ▲" if st.session_state._show_dom_hol else "🇰🇷 국내 ▼"
+            if st.button(_dl, key="btn_dom_hol", use_container_width=True):
+                st.session_state._show_dom_hol = not st.session_state._show_dom_hol
+                st.session_state._show_us_hol = False
         with _hcol2:
-            with st.expander("🇺🇸 미국", expanded=False):
-                st.warning("🇺🇸 **NYSE/NASDAQ 미국휴장일**")
-                for h in _US_HOLIDAYS:
-                    st.markdown(f"- **{h['date']}**: {h['reason']}")
+            _ul = "🇺🇸 미국 ▲" if st.session_state._show_us_hol else "🇺🇸 미국 ▼"
+            if st.button(_ul, key="btn_us_hol", use_container_width=True):
+                st.session_state._show_us_hol = not st.session_state._show_us_hol
+                st.session_state._show_dom_hol = False
+        if st.session_state._show_dom_hol:
+            st.info("🇰🇷 **코스피/코스닥 휴장일**")
+            for h in _DOMESTIC_HOLIDAYS:
+                st.markdown(f"- **{h['date']}**: {h['reason']}")
+        if st.session_state._show_us_hol:
+            st.warning("🇺🇸 **NYSE/NASDAQ 미국휴장일**")
+            for h in _US_HOLIDAYS:
+                st.markdown(f"- **{h['date']}**: {h['reason']}")
 
         # ── 시스템 상태 ───────────────────────────────────────────────────────
         # P1 데이터 신선도
@@ -1141,83 +1154,91 @@ def render_detail(ticker, name, rsi_snapshot, cb_overhang, surge_reasons=None):
             f"</div>{_meta_row}</div>",
             unsafe_allow_html=True)
 
-        # ② 팝업 버튼 2개 — P1 ui_detail.py와 동일한 로직
+        # ② 재무/투자 토글 버튼 2개 — P1 ui_detail.py와 동일한 로직
+        for _k in ["_show_fin_panel", "_show_inv_panel"]:
+            if _k not in st.session_state:
+                st.session_state[_k] = False
         _pc1, _pc2 = st.columns(2)
         with _pc1:
-            with st.expander("10초 재무 확인", expanded=False):
-                st.markdown("**🛡️ 재무 안정성 지표**")
-                # 유동비율 / 부채비율 (kis_stability)
-                crnt_rate = float(kis_stab.get("crnt_rate", 0) or 0)
-                lblt_rate = float(kis_stab.get("lblt_rate", 0) or 0)
-                _crnt_str = f"{crnt_rate:.1f}%" if crnt_rate > 0 else "N/A"
-                _lblt_str = f"{lblt_rate:.1f}%" if lblt_rate > 0 else "N/A"
-                _crnt_kind = "good" if crnt_rate >= 150 else ("warn" if crnt_rate >= 100 else "bad")
-                _lblt_kind = "good" if 0 < lblt_rate <= 100 else ("warn" if lblt_rate <= 200 else "bad")
-                # 자본잠식 (kis_balance: cpfn / total_cptl) — P1과 동일 공식
-                _cpfn = float(kis_balance.get("cpfn", 0) or 0)
-                _cptl = float(kis_balance.get("total_cptl", 0) or 0)
-                if _cpfn > 0 and _cptl <= 0:
-                    _cap_label = "완전잠식"; _cap_kind = "bad"
-                elif _cpfn > 0 and _cptl < _cpfn:
-                    _cap_pct   = (_cpfn - _cptl) / _cpfn * 100
-                    _cap_label = f"부분잠식 {_cap_pct:.1f}%"; _cap_kind = "warn"
-                elif _cptl > 0:
-                    _cap_label = "정상"; _cap_kind = "good"
-                else:
-                    _cap_label = "N/A"; _cap_kind = "neutral"
-                st.markdown(
-                    _mrow("유동비율", _crnt_str,
-                          _badge("양호" if crnt_rate >= 150 else ("주의" if crnt_rate >= 100 else "위험"), _crnt_kind)) +
-                    _mrow("부채비율", _lblt_str,
-                          _badge("양호" if 0 < lblt_rate <= 100 else ("주의" if lblt_rate <= 200 else "위험"), _lblt_kind)) +
-                    _mrow("자본잠식", _cap_label, _badge(_cap_label.split()[0], _cap_kind)),
-                    unsafe_allow_html=True)
-
+            _fl = "10초 재무 확인 ▲" if st.session_state._show_fin_panel else "10초 재무 확인 ▼"
+            if st.button(_fl, key=f"btn_fin_{ticker}", use_container_width=True):
+                st.session_state._show_fin_panel = not st.session_state._show_fin_panel
+                st.session_state._show_inv_panel = False
         with _pc2:
-            with st.expander("핵심 투자 지표", expanded=False):
-                st.markdown("**📌 성장 및 가치 지표**")
-                # P1과 동일: financial_ratio[0]에서 eps/bps/roe_val/bsop_prfi_inrt/grs
-                _eps_val = float(_latest_ratio.get("eps", 0) or 0)
-                _bps_val = float(_latest_ratio.get("bps", 0) or 0)
-                _roe     = float(_latest_ratio.get("roe_val", 0) or 0)
-                _opm     = float(_latest_ratio.get("bsop_prfi_inrt", 0) or 0)
-                _grs     = float(_latest_ratio.get("grs", 0) or 0)
-                # PER / PBR: 현재가 / eps,bps 직접 계산 (P1 방식)
-                if _eps_val > 0:
-                    per_str = f"{cur_price / _eps_val:.2f}배"
-                elif _eps_val < 0:
-                    per_str = "적자"
-                else:
-                    per_str = "N/A"
-                pbr_str = f"{cur_price / _bps_val:.2f}배" if _bps_val > 0 else "N/A"
-                eps_str = f"{_eps_val:,.0f}원" if _eps_val != 0 else "N/A"
-                def _per_badge(s):
-                    if "N/A" in s: return _badge("N/A", "neutral")
-                    if "적자" in s: return _badge("적자", "bad")
-                    try:
-                        v = float(s.replace("배","").strip())
-                        return _badge("양호" if v<=15 else ("주의" if v<=30 else "과열"),
-                                      "good" if v<=15 else ("warn" if v<=30 else "bad"))
-                    except: return _badge("?", "neutral")
-                def _pbr_badge(s):
-                    if "N/A" in s: return _badge("N/A", "neutral")
-                    try:
-                        v = float(s.replace("배","").strip())
-                        return _badge("양호" if v<=2 else "주의", "good" if v<=2 else "warn")
-                    except: return _badge("?", "neutral")
-                st.markdown(
-                    _mrow("PER", per_str, _per_badge(per_str)) +
-                    _mrow("PBR", pbr_str, _pbr_badge(pbr_str)) +
-                    _mrow("EPS", eps_str,
-                          _badge("양호","good") if _eps_val > 0 else (_badge("적자","bad") if _eps_val < 0 else _badge("N/A","neutral"))) +
-                    _mrow("ROE", f"{_roe:.1f}%" if _roe != 0 else "N/A",
-                          _badge("우수","good") if _roe>=15 else (_badge("양호","good") if _roe>=8 else
-                          (_badge("주의","warn") if _roe>0 else (_badge("위험","bad") if _roe<0 else _badge("N/A","neutral"))))) +
-                    _mrow("영업이익률", f"{_opm:.1f}%" if _opm != 0 else "N/A",
-                          _badge("양호","good") if _opm>=10 else (_badge("보통","neutral") if _opm>=0 else _badge("위험","bad"))) +
-                    _mrow("매출성장률", f"{_grs:.1f}%" if _grs != 0 else "N/A",
-                          _badge("성장","good") if _grs>=10 else (_badge("보통","neutral") if _grs>=0 else _badge("역성장","bad"))),
-                    unsafe_allow_html=True)
+            _il = "핵심 투자 지표 ▲" if st.session_state._show_inv_panel else "핵심 투자 지표 ▼"
+            if st.button(_il, key=f"btn_inv_{ticker}", use_container_width=True):
+                st.session_state._show_inv_panel = not st.session_state._show_inv_panel
+                st.session_state._show_fin_panel = False
+
+        if st.session_state._show_fin_panel:
+            st.markdown("**🛡️ 재무 안정성 지표**")
+            crnt_rate = float(kis_stab.get("crnt_rate", 0) or 0)
+            lblt_rate = float(kis_stab.get("lblt_rate", 0) or 0)
+            _crnt_str = f"{crnt_rate:.1f}%" if crnt_rate > 0 else "N/A"
+            _lblt_str = f"{lblt_rate:.1f}%" if lblt_rate > 0 else "N/A"
+            _crnt_kind = "good" if crnt_rate >= 150 else ("warn" if crnt_rate >= 100 else "bad")
+            _lblt_kind = "good" if 0 < lblt_rate <= 100 else ("warn" if lblt_rate <= 200 else "bad")
+            _cpfn = float(kis_balance.get("cpfn", 0) or 0)
+            _cptl = float(kis_balance.get("total_cptl", 0) or 0)
+            if _cpfn > 0 and _cptl <= 0:
+                _cap_label = "완전잠식"; _cap_kind = "bad"
+            elif _cpfn > 0 and _cptl < _cpfn:
+                _cap_pct   = (_cpfn - _cptl) / _cpfn * 100
+                _cap_label = f"부분잠식 {_cap_pct:.1f}%"; _cap_kind = "warn"
+            elif _cptl > 0:
+                _cap_label = "정상"; _cap_kind = "good"
+            else:
+                _cap_label = "N/A"; _cap_kind = "neutral"
+            st.markdown(
+                _mrow("유동비율", _crnt_str,
+                      _badge("양호" if crnt_rate >= 150 else ("주의" if crnt_rate >= 100 else "위험"), _crnt_kind)) +
+                _mrow("부채비율", _lblt_str,
+                      _badge("양호" if 0 < lblt_rate <= 100 else ("주의" if lblt_rate <= 200 else "위험"), _lblt_kind)) +
+                _mrow("자본잠식", _cap_label, _badge(_cap_label.split()[0], _cap_kind)),
+                unsafe_allow_html=True)
+
+        if st.session_state._show_inv_panel:
+            st.markdown("**📌 성장 및 가치 지표**")
+            _eps_val = float(_latest_ratio.get("eps", 0) or 0)
+            _bps_val = float(_latest_ratio.get("bps", 0) or 0)
+            _roe     = float(_latest_ratio.get("roe_val", 0) or 0)
+            _opm     = float(_latest_ratio.get("bsop_prfi_inrt", 0) or 0)
+            _grs     = float(_latest_ratio.get("grs", 0) or 0)
+            if _eps_val > 0:
+                per_str = f"{cur_price / _eps_val:.2f}배"
+            elif _eps_val < 0:
+                per_str = "적자"
+            else:
+                per_str = "N/A"
+            pbr_str = f"{cur_price / _bps_val:.2f}배" if _bps_val > 0 else "N/A"
+            eps_str = f"{_eps_val:,.0f}원" if _eps_val != 0 else "N/A"
+            def _per_badge(s):
+                if "N/A" in s: return _badge("N/A", "neutral")
+                if "적자" in s: return _badge("적자", "bad")
+                try:
+                    v = float(s.replace("배","").strip())
+                    return _badge("양호" if v<=15 else ("주의" if v<=30 else "과열"),
+                                  "good" if v<=15 else ("warn" if v<=30 else "bad"))
+                except: return _badge("?", "neutral")
+            def _pbr_badge(s):
+                if "N/A" in s: return _badge("N/A", "neutral")
+                try:
+                    v = float(s.replace("배","").strip())
+                    return _badge("양호" if v<=2 else "주의", "good" if v<=2 else "warn")
+                except: return _badge("?", "neutral")
+            st.markdown(
+                _mrow("PER", per_str, _per_badge(per_str)) +
+                _mrow("PBR", pbr_str, _pbr_badge(pbr_str)) +
+                _mrow("EPS", eps_str,
+                      _badge("양호","good") if _eps_val > 0 else (_badge("적자","bad") if _eps_val < 0 else _badge("N/A","neutral"))) +
+                _mrow("ROE", f"{_roe:.1f}%" if _roe != 0 else "N/A",
+                      _badge("우수","good") if _roe>=15 else (_badge("양호","good") if _roe>=8 else
+                      (_badge("주의","warn") if _roe>0 else (_badge("위험","bad") if _roe<0 else _badge("N/A","neutral"))))) +
+                _mrow("영업이익률", f"{_opm:.1f}%" if _opm != 0 else "N/A",
+                      _badge("양호","good") if _opm>=10 else (_badge("보통","neutral") if _opm>=0 else _badge("위험","bad"))) +
+                _mrow("매출성장률", f"{_grs:.1f}%" if _grs != 0 else "N/A",
+                      _badge("성장","good") if _grs>=10 else (_badge("보통","neutral") if _grs>=0 else _badge("역성장","bad"))),
+                unsafe_allow_html=True)
 
         st.divider()
 
