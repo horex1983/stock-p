@@ -28,8 +28,11 @@ st.markdown("""
 .down { color: #1565c0 !important; }
 .section-title { color: #212529; font-size: 1.05em; font-weight: 700;
     border-left: 3px solid #2e7d32; padding-left: 8px; margin: 16px 0 8px 0; }
-section[data-testid="stSidebar"] { width: 340px !important; min-width: 340px !important; }
+section[data-testid="stSidebar"] { width: 340px !important; min-width: 340px !important;
+    transition: transform 0.3s ease-in-out, width 0.3s ease-in-out !important; }
 section[data-testid="stSidebar"] > div:first-child { width: 340px !important; }
+section.main { transition: margin-left 0.3s ease-in-out !important; }
+.main .block-container { transition: max-width 0.3s ease-in-out, padding 0.3s ease-in-out !important; }
 </style>""", unsafe_allow_html=True)
 
 
